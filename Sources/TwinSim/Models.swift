@@ -1,0 +1,187 @@
+import Foundation
+
+enum Engine: String, CaseIterable, Codable, Sendable {
+    case android = "android-emulator"
+    case simulator = "ios-simulator"
+    case vphone = "ios-vphone"
+}
+
+enum Profile: String, CaseIterable, Codable, Sendable {
+    case android = "android-aosp"
+    case research = "android-research"
+    case magisk = "android-magisk"
+    case google = "android-google-apis"
+    case simulator = "ios-development"
+    case vphone = "ios-research"
+
+    var engine: Engine {
+        switch self {
+        case .simulator: .simulator
+        case .vphone: .vphone
+        default: .android
+        }
+    }
+
+    var image: String {
+        "system-images;android-34;\(self == .google ? "google_apis" : "default");arm64-v8a"
+    }
+
+    var rootMode: String {
+        switch self {
+        case .research, .google: "adb"
+        case .magisk: "magisk"
+        default: "none"
+        }
+    }
+
+    var component: String {
+        switch engine {
+        case .android: self == .google ? "android-google-apis" : "android-runtime"
+        case .simulator: "ios-simulator-runtime"
+        case .vphone: "ios-vphone"
+        }
+    }
+}
+
+struct Capability: Codable, Sendable {
+    let availability: String
+    var reasonCode: String? = nil
+
+    static let available = Self(availability: "available")
+    static let unsupported = Self(availability: "unsupported")
+    static func blocked(_ code: String) -> Self { Self(availability: "blocked", reasonCode: code) }
+}
+
+struct Device: Codable, Sendable {
+    let id: UUID
+    let name: String
+    let profileId: Profile
+    let engineId: Engine
+    let purpose: String
+    var externalName: String? = nil
+    var driverID: String?
+    var state: String
+    var guestUid: Int? = nil
+    var selinux: String? = nil
+    var installed: [String: UUID] = [:]
+    var forwardedPorts: [Int]? = nil
+
+    var driverName: String { "twinsim-" + id.uuidString.lowercased() }
+}
+
+struct InstanceView: Encodable {
+    let id: UUID
+    let name: String
+    let profileId: Profile
+    let engineId: Engine
+    let purpose: String
+    let state: String
+    let guestUid: Int?
+    let selinux: String?
+    let capabilities: [String: Capability]
+
+    init(_ device: Device, capabilities: [String: Capability]) {
+        id = device.id
+        name = device.name
+        profileId = device.profileId
+        engineId = device.engineId
+        purpose = device.purpose
+        state = device.state
+        guestUid = device.guestUid
+        selinux = device.selinux
+        self.capabilities = capabilities
+    }
+}
+
+struct Artifact: Codable, Sendable {
+    enum Kind: String, Codable, Sendable {
+        case apk, ipa, simulatorApp
+        var engine: Engine {
+            switch self {
+            case .apk: .android
+            case .ipa: .vphone
+            case .simulatorApp: .simulator
+            }
+        }
+    }
+
+    let id: UUID
+    let name: String
+    let kind: Kind
+    let bundleId: String
+    let sha256: String
+    let filename: String
+}
+
+struct Operation: Codable, Sendable {
+    let id: UUID
+    let action: String
+    var state: String
+    var instanceId: UUID?
+    var stage: String?
+    var receivedBytes: Int64?
+    var totalBytes: Int64?
+    var result: [String: String]?
+    var error: BackendError?
+}
+
+struct State: Codable {
+    var instances: [UUID: Device] = [:]
+    var artifacts: [UUID: Artifact] = [:]
+    var operations: [UUID: Operation] = [:]
+    var idempotency: [String: Idempotency] = [:]
+}
+
+struct Idempotency: Codable {
+    let fingerprint: String
+    let operation: UUID
+}
+
+struct LicenseText: Codable, Sendable {
+    let id: String
+    let sha256: String
+    let text: String
+}
+
+struct Component: Codable, Sendable {
+    let id: String
+    let status: String
+    var version: String? = nil
+    var source: String? = nil
+    var downloadBytes: Int64? = nil
+    var requiredFreeBytes: Int64? = nil
+    var reasonCode: String? = nil
+    var licenses: [LicenseText]? = nil
+}
+
+struct CreateRequest: Decodable {
+    let engineId: Engine
+    let profileId: Profile
+    let name: String
+    let externalName: String?
+}
+
+struct ImportRequest: Decodable { let path: String }
+
+struct InstallComponentRequest: Decodable {
+    var acceptLicenses: [String: String]?
+}
+
+struct ActionRequest: Decodable {
+    var artifactId: UUID?
+    var bundleId: String?
+    var snapshot: String?
+    var x: Int?
+    var y: Int?
+    var value: String?
+    var argv: [String]?
+    var localPath: String?
+    var remotePath: String?
+    var guestPort: Int?
+    var localPort: Int?
+}
+
+struct LaunchRequest: Decodable {
+    var instanceId: UUID?
+    var profileId: Profile?
+}

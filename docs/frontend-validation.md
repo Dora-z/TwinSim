@@ -1,0 +1,94 @@
+# TwinSim 前端联调记录
+
+验证日期 2026-11-08。宿主为 Apple M6、macOS 27.2，Xcode 27.2，Android SDK 位于 `/Volumes/External/Android`。被测对象是打包后的 `dist/TwinSim.app`（内置 `twinsimd` 与 `jidr`），通过 LaunchServices（`open -W -n --env …`）启动，与 Finder 双击时处于同一用户 GUI 会话。每轮使用全新的独立 `TWINSIM_HOME`（`.build/e2e/home`）。`ANDROID_HOME` 和 `DEVELOPER_DIR` 只写入应用设置（`com.twinsim.app` 偏好），由前端传给 helper，启动 shell 不导出这两个变量。
+
+自测（`scripts/frontend-e2e.sh`）在应用内运行，使用界面所用的 `AppStore`、真实画面窗口、VideoToolbox 解码器和触控换算代码，结果写入 `.build/e2e/report/report.md`。最终一轮 **44/44 通过**，总耗时 313 秒。样本由 `scripts/make-test-samples.sh` 生成。
+
+## 通用
+
+| 项目 | 结果 | 说明 |
+| --- | --- | --- |
+| 启动 helper、读取握手、Bearer 令牌 | 通过 | stdout 单行 JSON。令牌只在内存中 |
+| SSE 订阅与 `reset` | 通过 | 首个事件为 `reset`，前端重读全部列表。后端每 60 秒关流，前端按 `Last-Event-ID` 续订 |
+| 组件列表与安装进度 | 通过 | 新数据目录中 `android-display` 为 `downloadable`。前端发起安装，显示阶段和字节进度（如 20 KB / 732 KB），完成后刷新为 `ready` |
+| 许可确认界面 | 已显示，未提交 | `android-runtime` 为 `needsConsent`，界面显示后端返回的许可原文和指纹，勾选后才能安装。未提交，避免下载约 10 GB 的 AOSP 镜像 |
+| `externalSetup` | 通过 | `ios-vphone` 显示 `RESEARCH_GUESTS_DISABLED` 原因、上游配置链接和「配置完成，重新检查」 |
+| helper 意外退出 | 通过 | 对 helper 发 SIGKILL，前端 1 秒后重启（新 PID），重新握手和订阅，实例状态从 `unknown` 核对回 `ready`，画面窗口自动重连 |
+| 正常退出 | 通过 | 通过 Apple Event 退出应用后 helper 随之退出，无残留进程 |
+
+## Android（`android-google-apis`，API 34，客体 720×1280）
+
+| 项目 | 结果 | 说明 |
+| --- | --- | --- |
+| 导入 APK | 通过 | `org.twinsim.touchprobe`，重复导入返回同一 ID |
+| 单应用模式打开 | 通过 | `/v1/artifacts/{id}/launch`，新建应用工作区、启动、安装并启动应用，约 28 秒。AOSP 运行环境未安装，前端自动选择已就绪的 Google APIs 配置 |
+| 实时画面 | 通过 | `/video` Annex B 流经 VideoToolbox 解码。解码错误 0，空闲刷出尾部 NAL 6 次 |
+| 触控 | 通过 | 点击画面中 (0.5,0.5)、(0.2,0.8)、(0.85,0.3)，客体记录的坐标分别为 (360,640)、(144,1024)、(612,384)，与换算结果一致，画面随后更新 |
+| 再次打开 | 通过 | 复用同一实例和已有安装，约 1.4 秒 |
+| 断线重连 | 通过 | 模拟视频连接中断后自动重连。旧订阅未释放时收到 `RESOURCE_BUSY`，等待后恢复 |
+| 截图回退 | 通过 | 切换到截图模式显示 720×1280 PNG，再切回实时画面 |
+| 停机 | 通过 | 约 4 秒，窗口显示「设备已停机」和「启动」按钮 |
+| 「设备」页创建、启动、画面 | 通过 | 创建约 1 秒，启动约 34 秒，打开设备窗口 |
+| 研究工具 | 通过 | root 返回 UID 0。shell `id -u; getprop ro.product.cpu.abi` 返回 `0 arm64-v8a`。端口转发分配 127.0.0.1 端口后取消 |
+| 日志 | 通过 | logcat |
+
+截图：[应用窗口](images/frontend/04-android-window.png)、[触控后解码帧](images/frontend/05-android-after-taps.png)、[设备窗口](images/frontend/10-device-android.png)
+
+## iOS Simulator（iOS 27.2 runtime，客体 1206×2622）
+
+| 项目 | 结果 | 说明 |
+| --- | --- | --- |
+| 导入 Simulator `.app` | 通过 | ARM64 `IOSSIMULATOR` 样本 |
+| 单应用模式打开 | 通过 | 约 47 秒（含创建并启动 Simulator） |
+| 截图 | 通过 | 窗口为截图模式，1206×2622 |
+| 触控 | 不提供 | 后端报告 `input` 为 `unsupported`，界面不显示触控和按键入口 |
+| 日志 | 通过（需重试） | 刚启动后首次请求返回 `OUTPUT_LIMIT`：后端 `log show --last 30s` 的输出超过 32 MB 上限，可能需要 20–55 秒。界面显示原因，重试后成功 |
+| 再次打开 | 通过 | 复用同一实例 |
+| 停机 | 通过 | 约 4 秒 |
+| 「设备」页创建、启动、画面、停机 | 通过 | |
+
+截图：[应用窗口](images/frontend/07-ios-window.png)
+
+## iOS 真机 IPA
+
+| 项目 | 结果 | 说明 |
+| --- | --- | --- |
+| 导入 | 通过 | 识别为 device IPA |
+| 宿主机阻塞提示 | 通过 | 本机 Research Guests 已禁用。点「打开」时前端不提交启动，直接显示原因、处理步骤和 vphone 上游配置链接（[截图](images/frontend/08-ipa-blocked.png)） |
+| 后端路径 | 通过 | 强制提交启动后，操作以 `RESEARCH_GUESTS_DISABLED` 失败。测试数据目录会留下一条失败的 vphone 应用工作区 |
+
+## 未覆盖或受限的项目
+
+- vphone 研究虚拟机未运行：本机未启用 Research Guests。
+- 以下界面已实现，但本轮未自动化：拖拽和文件选择导入（与自测使用同一 `importFiles` 路径）、Finder「打开方式」打开 `.apk`/`.ipa`、拖动映射的 `input swipe`、文本输入、系统分区可写、快照、客体文件传入和导出、有运行中设备时的退出确认。系统分区可写、快照和文件传输的后端实测见 [host-validation.md](host-validation.md)。
+- 未下载 AOSP 运行环境，`android-aosp`、`android-research` 和 `android-magisk` 配置未在前端实测。
+- 前端必须在用户 GUI 会话中运行，iOS Simulator 才能启动。从无 GUI 会话的 shell 直接执行应用二进制时，`simctl boot` 报 `launchd_sim: could not bind to session`。
+
+## 签名状态
+
+本机没有 Developer ID 证书（`security find-identity -p codesigning` 返回 0 个），所以交付本地签名包：`TwinSim.app`、`twinsimd` 和 `jidr` 都使用 ad hoc 签名并启用 hardened runtime，`codesign --verify --deep --strict` 通过。`spctl --assess` 结果为 rejected，属 ad hoc 签名的预期结果。未公证。提供 `TWINSIM_SIGN_IDENTITY` 和 `TWINSIM_NOTARY_PROFILE` 后，`scripts/package-app.sh` 会完成 Developer ID 签名、公证和 staple，见 [前端文档](frontend.md#签名与公证)。
+
+## AI 集成
+
+`python3 scripts/agent-e2e.py` 以 MCP 客户端身份（stdio JSON-RPC）驱动打包后的 `Contents/Helpers/twinsim mcp`，再测试命令行。测试使用独立的 `TWINSIM_HOME`，开始时 TwinSim 未运行，`TWINSIM_MAX_EDGE=640`。最终一轮 **36/36 通过**，耗时 266 秒。
+
+| 项目 | 结果 | 说明 |
+| --- | --- | --- |
+| MCP `initialize`、`tools/list` | 通过 | 31 个工具，返回使用说明 |
+| 自动启动应用 | 通过 | 首次调用通过 `open -g -j` 在后台启动 TwinSim，约 5 秒连上后端 |
+| 安装组件 | 通过 | `android-display` |
+| `open_app` APK | 通过 | 自动选择已就绪的 Google APIs 配置，约 28 秒。再次打开复用同一设备 |
+| 截图缩放与坐标换算 | 通过 | 客体 720×1280，返回 360×640 图片。点击图片坐标 (180,320)，客体记录 (360,640) |
+| `ui_tree`、`tap_element`、`wait_for_text` | 通过 | 在系统设置中，`tap_element "Display"` 自动滚动一次后找到并进入，出现 “Dark theme” |
+| `type_text`、`press_key`、`swipe` | 通过 | 点开设置搜索框，输入 “dark theme” 并显示在输入框中 |
+| `logs` 过滤 | 通过 | Android 上在客体中对整个 logcat 缓冲区执行 grep |
+| `verify_root`、`shell`、端口转发 | 通过 | UID 0 |
+| 命令行 | 通过 | 可用设备 ID 前缀。截图为原始分辨率。`call` 返回 JSON。`tools --format openai/anthropic/gemini/mcp` 均输出 31 个定义。错误时退出码为 1 并附提示 |
+| iOS Simulator | 通过 | 打开约 84 秒（首次创建设备），截图正常。`tap` 返回 `CAPABILITY_UNSUPPORTED` |
+| 真机 IPA | 通过 | `open_app` 返回 `RESEARCH_GUESTS_DISABLED`，并附宿主机配置链接 |
+| 许可确认 | 通过 | `install_component android-runtime` 只返回许可原文，未传 `acceptLicenses=true` 时不会安装 |
+| `show_device`、`stop_device` | 通过 | |
+
+另一轮紧接重新打包之后运行时，后台启动失败：`open` 没有启动应用，套接字也没有出现，原因未确认。之后命令行改为检查 `open` 的退出状态并重试启动，再次紧接打包运行时通过。改动后用 `TWINSIM_SELF_TEST_PLATFORMS=android,ipa` 回归 GUI 自测，25/25 通过，并确认应用内的 AI 连接正在监听（[设置页截图](images/frontend/12-ai-settings.png)）。
+
+未在真实客户端中验证：未在 Claude Code、Claude Desktop、Cursor、VS Code、Codex、Gemini CLI 中实际加载配置，本机未安装这些 CLI。协议层面已由上面的 MCP 客户端测试覆盖。
