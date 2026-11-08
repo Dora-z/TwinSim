@@ -15,6 +15,7 @@ struct ToolsPanel: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 CapabilityGrid(instance: instance)
+                section("windowsTools") { WindowsTools(instance: instance) }
                 section("guestShell") { ShellTool(instance: instance) }
                 section("guestRoot") { RootTool(instance: instance) }
                 section("writableSystem") { WritableSystemTool(instance: instance) }
@@ -61,7 +62,8 @@ struct ShellTool: View {
                 Button(action: run) { running ? AnyView(ProgressView().controlSize(.small)) : AnyView(Text("运行")) }
                     .disabled(running || command.isEmpty)
             }
-            Text("通过 /system/bin/sh -c 执行，参数以 argv 传给后端。").font(.caption2).foregroundStyle(.secondary)
+            Text(instance.isWindows ? "通过 Wine 的 cmd /c 执行。" : "通过 /system/bin/sh -c 执行，参数以 argv 传给后端。")
+                .font(.caption2).foregroundStyle(.secondary)
             if !output.isEmpty {
                 ScrollView {
                     Text(output).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
@@ -76,9 +78,9 @@ struct ShellTool: View {
 
     private func run() {
         running = true
-        let shell = instance.isAndroid ? "sh" : "/bin/sh"
+        let argv = instance.isWindows ? ["cmd", "/c", command] : [instance.isAndroid ? "sh" : "/bin/sh", "-c", command]
         Task {
-            if let op = await store.run(instance.id, "shell", body: ["argv": [shell, "-c", command]]) {
+            if let op = await store.run(instance.id, "shell", body: ["argv": argv]) {
                 let r = op.result ?? [:]
                 if let guest = r["guestResult"] {
                     output = guest
@@ -196,7 +198,10 @@ struct FileTransferTool: View {
             Text("单个文件上限 128 MB。").font(.caption2).foregroundStyle(.secondary)
         }
         .disabled(running)
-        .onAppear { if !instance.isAndroid { remoteDir = "/var/root"; pullPath = "/var/root/" } }
+        .onAppear {
+            if instance.isWindows { remoteDir = #"C:\users\Public"#; pullPath = #"C:\users\Public\"# }
+            else if !instance.isAndroid { remoteDir = "/var/root"; pullPath = "/var/root/" }
+        }
     }
 
     private func push() {
@@ -204,7 +209,8 @@ struct FileTransferTool: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let remote = (remoteDir.hasSuffix("/") ? remoteDir : remoteDir + "/") + url.lastPathComponent
+        let separator = instance.isWindows ? "\\" : "/"
+        let remote = (remoteDir.hasSuffix(separator) ? remoteDir : remoteDir + separator) + url.lastPathComponent
         running = true
         Task {
             if await store.run(instance.id, "guest-push", body: ["localPath": url.path, "remotePath": remote]) != nil {
@@ -215,7 +221,8 @@ struct FileTransferTool: View {
     }
 
     private func pull() {
-        guard pullPath.hasPrefix("/"), !pullPath.hasSuffix("/") else { message = "请输入完整的客体文件路径。"; return }
+        let absolute = instance.isWindows ? pullPath.count > 3 && pullPath.dropFirst().hasPrefix(":\\") : pullPath.hasPrefix("/")
+        guard absolute, !pullPath.hasSuffix("/"), !pullPath.hasSuffix("\\") else { message = "请输入完整的客体文件路径。"; return }
         running = true
         Task {
             defer { running = false }
@@ -223,7 +230,7 @@ struct FileTransferTool: View {
                 guard let client = store.client else { throw APIError.disconnected }
                 let data = try await client.guestFile(instance.id, path: pullPath)
                 let panel = NSSavePanel()
-                panel.nameFieldStringValue = URL(fileURLWithPath: pullPath).lastPathComponent
+                panel.nameFieldStringValue = URL(fileURLWithPath: pullPath.replacingOccurrences(of: "\\", with: "/")).lastPathComponent
                 guard panel.runModal() == .OK, let url = panel.url else { return }
                 try data.write(to: url)
                 message = "已导出 \(Labels.bytes(Int64(data.count))) 到 \(url.path)"
@@ -280,6 +287,68 @@ struct PortForwardTool: View {
             if await store.run(instance.id, "unforward", body: ["localPort": local]) != nil {
                 forwards.removeAll { $0.local == local }
             }
+        }
+    }
+}
+
+/// Windows (Wine) device tools: built-in Windows utilities, graphics and display settings.
+struct WindowsTools: View {
+    @Environment(AppStore.self) private var store
+    let instance: Instance
+    @State private var message: String?
+    @State private var running = false
+
+    private let tools: [(String, String, String)] = [
+        ("winecfg", "Wine 设置", "gearshape"), ("explorer", "文件管理器", "folder"), ("regedit", "注册表编辑器", "list.bullet.indent"),
+        ("taskmgr", "任务管理器", "chart.bar"), ("cmd", "命令提示符", "terminal"), ("control", "控制面板", "slider.horizontal.3"),
+        ("uninstaller", "卸载程序", "trash"), ("notepad", "记事本", "doc.text"),
+    ]
+
+    private var driveC: URL {
+        URL(fileURLWithPath: store.dataDirectory)
+            .appendingPathComponent("wine/prefixes/twinsim-\(instance.id.uuidString.lowercased())/drive_c")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), alignment: .leading)], alignment: .leading, spacing: 6) {
+                ForEach(tools, id: \.0) { tool in
+                    Button { act("wine-tool", tool.0) } label: { Label(tool.1, systemImage: tool.2) }
+                        .disabled(!instance.isReady || running)
+                }
+            }
+            Button { NSWorkspace.shared.open(driveC) } label: { Label("在 Finder 中打开 C 盘", systemImage: "externaldrive") }
+                .disabled(!FileManager.default.fileExists(atPath: driveC.path))
+            Divider()
+            HStack {
+                Text("图形加速（DXVK）")
+                Spacer()
+                Button("开启") { act("dxvk", "on") }.disabled(instance.capability("dxvk")?.isAvailable != true || running)
+                Button("关闭") { act("dxvk", "off") }.disabled(!instance.isReady || running)
+            }
+            if let reason = instance.capability("dxvk")?.reasonCode {
+                Text(Labels.reason(reason) ?? reason).font(.caption).foregroundStyle(.secondary)
+            }
+            HStack {
+                Text("显示")
+                Spacer()
+                Button("Retina 清晰") { act("display", "retina") }.disabled(!instance.isReady || running)
+                Button("标准 96 DPI") { act("display", "standard") }.disabled(!instance.isReady || running)
+            }
+            Text("Retina 模式按 192 DPI 渲染，文字清晰；个别老程序界面过大或错位时改用标准模式。设置对之后启动的程序生效。")
+                .font(.caption2).foregroundStyle(.secondary)
+            if running { ProgressView().controlSize(.small) }
+            if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
+        }
+    }
+
+    private func act(_ action: String, _ value: String) {
+        running = true
+        Task {
+            if let op = await store.run(instance.id, action, body: ["value": value]) {
+                message = op.result?["note"] ?? "已完成"
+            }
+            running = false
         }
     }
 }

@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import SwiftUI
+import TwinSimAgentProtocol
 
 struct ScreenTarget: Codable, Hashable, Sendable {
     var instanceId: UUID
@@ -35,6 +36,7 @@ final class AppStore {
         case connected
         case restarting(attempt: Int, delay: Int)
         case failed(message: String, diagnostics: String)
+        case migrating(progress: Double, detail: String)
     }
 
     var connection: Connection = .idle
@@ -63,6 +65,13 @@ final class AppStore {
     @ObservationIgnored private var shuttingDown = false
 
     var isConnected: Bool { connection == .connected }
+
+    /// Current data directory (TWINSIM_HOME, else the Settings choice, else the default).
+    var dataDirectory: String { AgentProtocol.dataDirectory() }
+    var dataDirectoryIsDefault: Bool { dataDirectory == AgentProtocol.defaultDataDirectory }
+    var dataDirectoryLockedByEnvironment: Bool { ProcessInfo.processInfo.environment["TWINSIM_HOME"] != nil }
+    /// Set when the configured data directory (e.g. on an unplugged external drive) is missing.
+    var dataDirectoryMissing = false
 
     // Open screen windows register their session (weakly) so tooling and tests can reach them.
     @ObservationIgnored private let sessions = NSMapTable<NSUUID, ScreenSession>.strongToWeakObjects()
@@ -94,6 +103,14 @@ final class AppStore {
         if let old = process { old.onExit = nil; old.terminate() }
         process = nil
         HelperRegistry.reapOrphan()
+        // A custom location on an external drive must exist; otherwise the backend would silently
+        // create an empty directory where the drive is normally mounted.
+        dataDirectoryMissing = !dataDirectoryIsDefault && !DataLocation.isAvailable(dataDirectory)
+        if dataDirectoryMissing {
+            connection = .failed(message: "数据目录不可用：\(dataDirectory)。如果它在外置硬盘上，请连接硬盘后重试，或在设置中改回默认位置。",
+                                 diagnostics: "")
+            return
+        }
         guard let helper = BackendProcess.locateHelper() else {
             connection = .failed(message: "找不到内置的 twinsimd。请重新安装 TwinSim。", diagnostics: "")
             return
@@ -165,6 +182,119 @@ final class AppStore {
         new.save()
         settings = new
         await restartBackend()
+    }
+
+    /// Stops the helper for maintenance (data move) without marking the app as quitting.
+    private func suspendBackend() {
+        generation += 1
+        periodic?.cancel()
+        events?.stop()
+        events = nil
+        eventsConnected = false
+        client = nil
+        if let process { process.onExit = nil; process.terminate() }
+        process = nil
+    }
+
+    /// Permanently deletes a device (Android AVD / Simulator device and their data). vphone VMs are
+    /// only unregistered.
+    func deleteInstance(_ id: UUID) async -> Bool {
+        do {
+            try await perform(id, "delete", timeout: 600)
+            instances.removeAll { $0.id == id }
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            notify("删除设备失败", error)
+            await refreshInstance(id)
+            return false
+        }
+    }
+
+    // MARK: Data directory
+
+    /// Uses `destination` as the data directory without copying (empty folder, or one that
+    /// already holds TwinSim data, e.g. on an external drive moved from another Mac).
+    func switchDataDirectory(to destination: String?) async {
+        await stopAllRunning()
+        suspendBackend()
+        if let destination {
+            try? FileManager.default.createDirectory(atPath: destination, withIntermediateDirectories: true,
+                                                     attributes: [.posixPermissions: 0o700])
+        }
+        BackendSettings.dataDirectory = destination
+        await restartAfterRelocation()
+    }
+
+    /// Moves all data to `destination`: stops devices and the backend, copies with ditto, rewrites
+    /// AVD paths, switches the setting and restarts. The old copy is deleted only after the
+    /// backend runs from the new location; any failure rolls back to the old location.
+    func moveData(to destination: String, deleteOld: Bool) async {
+        let source = dataDirectory
+        await stopAllRunning()
+        let busy = instances.filter { ["ready", "starting", "stopping", "creating"].contains($0.state) }
+        guard busy.isEmpty else {
+            post(UserNotice(title: "无法移动数据", message: "仍有设备在运行：\(busy.map(\.displayName).joined(separator: "、"))。请先停机。"))
+            return
+        }
+        let helpers = process?.helperDirectory
+        connection = .migrating(progress: 0, detail: "正在停止后端…")
+        suspendBackend()
+        // Jidr keeps a daemon per data directory; stop it so no file stays open.
+        if let jidr = helpers?.appendingPathComponent("jidr"), FileManager.default.isExecutableFile(atPath: jidr.path) {
+            let stop = Process()
+            stop.executableURL = jidr
+            stop.arguments = ["daemon", "stop"]
+            stop.environment = ProcessInfo.processInfo.environment.merging(["JIDR_HOME": source + "/jidr"]) { $1 }
+            stop.standardOutput = FileHandle.nullDevice
+            stop.standardError = FileHandle.nullDevice
+            try? stop.run()
+            stop.waitUntilExit()
+        }
+        let existed = FileManager.default.fileExists(atPath: destination)
+        let result: Result<Void, Error> = await Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                try DataLocation.copy(from: source, to: destination) { fraction, item in
+                    Task { @MainActor in
+                        self?.connection = .migrating(progress: fraction, detail: item.isEmpty ? "正在完成…" : "正在复制 \(item)…")
+                    }
+                }
+                return .success(())
+            } catch {
+                return .failure(error)
+            }
+        }.value
+        switch result {
+        case .failure(let error):
+            if !existed { try? FileManager.default.removeItem(atPath: destination) }
+            post(UserNotice(title: "移动数据失败，仍使用原位置", message: error.localizedDescription))
+            await restartAfterRelocation()
+        case .success:
+            BackendSettings.dataDirectory = destination
+            await restartAfterRelocation()
+            guard isConnected else {
+                BackendSettings.dataDirectory = source == AgentProtocol.defaultDataDirectory ? nil : source
+                post(UserNotice(title: "新位置无法启动后端，已改回原位置", message: "原数据未删除。新位置：\(destination)"))
+                await restartAfterRelocation()
+                return
+            }
+            if deleteOld {
+                connection = .migrating(progress: 1, detail: "正在删除原位置的数据…")
+                let removed = await Task.detached { (try? FileManager.default.removeItem(atPath: source)) != nil }.value
+                connection = .connected
+                post(UserNotice(title: "数据已移动", message: "现在使用 \(destination)。" + (removed ? "原位置的数据已删除。" : "原位置的数据未能完全删除：\(source)")))
+            } else {
+                post(UserNotice(title: "数据已复制到新位置", message: "现在使用 \(destination)。原数据仍保留在 \(source)。"))
+            }
+        }
+    }
+
+    private func restartAfterRelocation() async {
+        agentBridge?.stop()
+        restartAttempts.removeAll()
+        await startBackend()
+        if AgentBridge.isEnabled { agentBridge?.start() }
     }
 
     /// Stops the helper. Devices stay under engine management unless stopped beforehand.
@@ -283,6 +413,11 @@ final class AppStore {
         case "operation":
             guard let op = try? JSONDecoder().decode(BackendOperation.self, from: Data(event.data.utf8)) else { return }
             record(op)
+        case "instance-deleted":
+            if let object = try? JSONSerialization.jsonObject(with: Data(event.data.utf8)) as? [String: Any],
+               let id = (object["id"] as? String).flatMap(UUID.init(uuidString:)) {
+                instances.removeAll { $0.id == id }
+            }
         case "instance":
             guard let partial = try? JSONDecoder().decode(Instance.self, from: Data(event.data.utf8)) else { return }
             if let index = instances.firstIndex(where: { $0.id == partial.id }) {
@@ -438,6 +573,7 @@ final class AppStore {
         switch artifact.kind {
         case "ipa": componentId = "ios-vphone"
         case "simulatorApp": componentId = "ios-simulator-runtime"
+        case "windowsExe", "windowsMsi": componentId = "windows-wine"
         default: componentId = "android-engine"
         }
         if artifact.kind == "apk", component("android-engine")?.isReady == true,
@@ -483,7 +619,8 @@ final class AppStore {
             let op = try await wait(accepted.operationId)
             let target = op.result?["instanceId"].flatMap(UUID.init(uuidString:)) ?? accepted.instanceId
             await reloadInstances()
-            if let target {
+            // Windows programs open their own native Mac windows; other platforms get a TwinSim window.
+            if let target, !artifact.isWindows {
                 openWindowAction?(value: ScreenTarget(instanceId: target, artifactId: artifact.id))
             }
         } catch is CancellationError {

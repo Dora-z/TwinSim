@@ -7,6 +7,7 @@ enum Labels {
         case "android-emulator": "Android 模拟器"
         case "ios-simulator": "iOS Simulator"
         case "ios-vphone": "iOS 研究虚拟机 (vphone)"
+        case "windows-wine": "Windows（Wine）"
         default: id
         }
     }
@@ -19,6 +20,7 @@ enum Labels {
         case "android-google-apis": "Android Google APIs (研究)"
         case "ios-development": "iOS 开发 (Simulator)"
         case "ios-research": "iOS 研究 (vphone)"
+        case "windows-desktop": "Windows 桌面（Wine）"
         default: id
         }
     }
@@ -44,6 +46,8 @@ enum Labels {
         case "android-google-apis": "Android Google APIs 运行环境"
         case "ios-simulator-runtime": "iOS Simulator runtime"
         case "ios-vphone": "iOS 研究虚拟机 (vphone)"
+        case "windows-wine": "Windows 运行环境（Wine）"
+        case "windows-dxvk": "Windows 图形加速（DXVK）"
         default: id
         }
     }
@@ -52,10 +56,12 @@ enum Labels {
         switch id {
         case "android-engine": "管理 Android SDK、AVD 与 ADB 的无界面引擎。创建 Android 设备前需要。"
         case "android-display": "提供 Android 实时 H.264 画面。未安装时使用截图。"
-        case "android-runtime": "AOSP ARM64 系统镜像、Emulator 与 platform-tools，用于普通、adb root 与 Magisk 配置。"
+        case "android-runtime": "AOSP ARM64 系统镜像、Emulator 与 platform-tools，用于 AOSP、adb root 研究与 Magisk 配置。未安装时这三种配置不可用，Google APIs 配置不受影响。"
         case "android-google-apis": "API 34 Google APIs ARM64 镜像，用于 Google APIs 研究配置。"
-        case "ios-simulator-runtime": "运行 Simulator .app 需要完整 Xcode 和 iOS Simulator runtime。"
+        case "ios-simulator-runtime": "运行 Simulator .app 需要完整 Xcode 和 iOS Simulator runtime。runtime 由 Xcode 下载到系统磁盘（/System/Library/AssetsV2），不能放到外置硬盘；Xcode 本身可以放在外置硬盘，并在设置中用 DEVELOPER_DIR 指定。"
         case "ios-vphone": "运行真机 IPA 的研究虚拟机，由上游 vphone Launchpad 配置。"
+        case "windows-wine": "WineHQ 上游 Wine（staging，macOS 构建），不依赖 CrossOver。在 Mac 上运行 32/64 位 Windows 程序（.exe/.msi），经 Rosetta 2 转译；Direct3D 通过 Vulkan → MoltenVK → Metal 渲染，已内置 Wine Mono 与 Gecko。"
+        case "windows-dxvk": "可选。DXVK（异步着色器编译）把 Direct3D 10/11 转为 Vulkan，游戏和 3D 程序通常更快更稳定。在设备的研究工具中按设备开启。"
         default: ""
         }
     }
@@ -76,6 +82,8 @@ enum Labels {
         case "apk": "Android APK"
         case "ipa": "iOS 真机 IPA"
         case "simulatorApp": "iOS Simulator .app"
+        case "windowsExe": "Windows 程序 (.exe)"
+        case "windowsMsi": "Windows 安装包 (.msi)"
         default: kind
         }
     }
@@ -87,6 +95,11 @@ enum Labels {
         case "open-app": "打开应用"
         case "start": "启动"
         case "stop": "停机"
+        case "delete": "删除设备"
+        case "text": "输入文本"
+        case "wine-tool": "打开 Windows 工具"
+        case "dxvk": "图形加速"
+        case "display": "显示模式"
         case "install": "安装应用"
         case "launch": "启动应用"
         case "uninstall": "卸载应用"
@@ -113,6 +126,10 @@ enum Labels {
         case "checking-licenses": return "检查许可"
         case "installing-android-packages": return "安装 Android SDK 组件"
         case "xcode-runtime": return "通过 Xcode 下载 iOS runtime"
+        case "downloading-wine": return "下载 Wine"
+        case "extracting-wine": return "解压 Wine"
+        case "downloading-dxvk": return "下载 DXVK"
+        case "verifying": return "校验"
         default: return id
         }
     }
@@ -133,6 +150,9 @@ enum Labels {
         case "installApk": "安装 APK"
         case "installSimulatorApp": "安装 Simulator .app"
         case "installDeviceIpa": "安装 IPA"
+        case "installWindowsApp": "安装 Windows 程序"
+        case "windowsTools": "Windows 工具"
+        case "dxvk": "DXVK 图形加速"
         default: id
         }
     }
@@ -173,6 +193,20 @@ enum Labels {
             return "后端调用的工具超时。iOS Simulator 刚启动时读取日志较慢，可稍后重试。"
         case "OUTPUT_LIMIT":
             return "工具输出超过后端上限（32 MB）。iOS Simulator 刚启动时日志量很大，可稍后重试。"
+        case "ROSETTA_MISSING":
+            return "运行 Windows 程序需要 Rosetta 2。在终端运行 `softwareupdate --install-rosetta`，完成后重新检查。"
+        case "WINE_MISSING":
+            return "需要先在「组件」页安装 Windows 运行环境（Wine）。"
+        case "DXVK_MISSING":
+            return "需要先在「组件」页安装 Windows 图形加速（DXVK）。"
+        case "NO_WINDOW":
+            return "这台 Windows 设备当前没有显示窗口。请先打开一个程序。"
+        case "SCREEN_RECORDING_REQUIRED":
+            return "需要允许 TwinSim 录制屏幕才能截取 Windows 程序窗口：系统设置 > 隐私与安全性 > 录屏与系统录音。"
+        case "ACCESSIBILITY_REQUIRED":
+            return "需要允许 TwinSim 控制电脑才能向 Windows 程序发送点击和按键：系统设置 > 隐私与安全性 > 辅助功能。"
+        case "APP_ARCH_UNSUPPORTED":
+            return "该 Windows 程序的架构不受支持（例如 ARM64 版）。请使用 x86 或 x64 版本。"
         case "APP_PLATFORM_MISMATCH":
             return "应用与所选设备的平台不匹配。"
         default:

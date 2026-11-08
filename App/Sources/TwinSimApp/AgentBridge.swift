@@ -11,7 +11,7 @@ final class AgentBridge: @unchecked Sendable {
         UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true
     }
 
-    let path = AgentProtocol.socketPath()
+    private(set) var path = AgentProtocol.socketPath()
     private weak var store: AppStore?
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
@@ -27,6 +27,7 @@ final class AgentBridge: @unchecked Sendable {
 
     func start() {
         guard !isListening else { return }
+        path = AgentProtocol.socketPath()
         do { try listen() } catch {
             lastError = error.localizedDescription
             FileHandle.standardError.write(Data("agent bridge: \(error.localizedDescription)\n".utf8))
@@ -42,8 +43,6 @@ final class AgentBridge: @unchecked Sendable {
     }
 
     private func listen() throws {
-        try FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent,
-                                                withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         guard var address = AgentProtocol.makeAddress(path) else { throw BridgeError("socket path too long: \(path)") }
         // A live socket means another TwinSim already serves this data directory.
         if FileManager.default.fileExists(atPath: path) {
@@ -165,7 +164,7 @@ final class AgentBridge: @unchecked Sendable {
             default: backend = "starting"
             }
             return ["ok": true, "protocol": AgentProtocol.version, "backend": backend,
-                    "app": Bundle.main.bundlePath, "dataDirectory": AgentProtocol.dataDirectory(),
+                    "app": Bundle.main.bundlePath, "dataDirectory": store.dataDirectory,
                     "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"]
         case "showWindow":
             guard let id = (request["instanceId"] as? String).flatMap(UUID.init(uuidString:)) else {

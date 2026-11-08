@@ -3,7 +3,8 @@ import Foundation
 
 /// Local agent bridge shared by TwinSim.app (server) and the `twinsim` CLI / MCP server (client).
 ///
-/// Transport: a Unix domain socket owned by the current user (mode 0600, peer UID checked).
+/// Transport: a Unix domain socket owned by the current user (mode 0600, peer UID checked), in the
+/// per-user temporary directory and keyed by the data directory.
 /// Framing: one JSON object per line in each direction. Requests carry an `id` that the
 /// response echoes. The backend session token never leaves the app process; the app adds it
 /// when it forwards `http` requests to twinsimd.
@@ -17,20 +18,34 @@ import Foundation
 public enum AgentProtocol {
     public static let version = 1
 
-    /// Data directory used by the backend (same rule as twinsimd).
-    public static func dataDirectory(environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
-        if let home = environment["TWINSIM_HOME"], !home.isEmpty { return home }
-        return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/TwinSim").path
+    public static let defaultsDomain = "com.twinsim.app"
+    public static let dataDirectoryKey = "dataDirectory"
+
+    public static var defaultDataDirectory: String {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/TwinSim").path
     }
 
-    /// Socket path: `<data directory>/agent.sock`, or a per-user temporary path when that would
-    /// exceed the 103-byte sun_path limit.
+    /// Data directory of the TwinSim instance: `TWINSIM_HOME`, else the location chosen in the
+    /// app's settings (which may be on an external drive), else the default.
+    public static func dataDirectory(environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
+        if let home = environment["TWINSIM_HOME"], !home.isEmpty { return home }
+        // Inside the app the domain is its own (UserDefaults rejects a suite equal to the bundle ID).
+        let defaults = Bundle.main.bundleIdentifier == defaultsDomain ? UserDefaults.standard : UserDefaults(suiteName: defaultsDomain)
+        if let chosen = defaults?.string(forKey: dataDirectoryKey), !chosen.isEmpty { return chosen }
+        return defaultDataDirectory
+    }
+
+    /// Socket path for a data directory. It lives in the per-user temporary directory (keyed by the
+    /// data directory) so it works when the data is on a drive that cannot hold sockets (exFAT)
+    /// and stays short enough for sun_path.
     public static func socketPath(environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
-        let preferred = (dataDirectory(environment: environment) as NSString).appendingPathComponent("agent.sock")
-        if preferred.utf8.count < 100 { return preferred }
+        socketPath(forDataDirectory: dataDirectory(environment: environment))
+    }
+
+    public static func socketPath(forDataDirectory directory: String) -> String {
+        let key = URL(fileURLWithPath: directory).standardizedFileURL.path
         var hash = UInt64(14_695_981_039_346_656_037)
-        for byte in preferred.utf8 { hash = (hash ^ UInt64(byte)) &* 1_099_511_628_211 }
+        for byte in key.utf8 { hash = (hash ^ UInt64(byte)) &* 1_099_511_628_211 }
         var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
         let tmp = confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, buffer.count) > 0 ? String(cString: buffer) : NSTemporaryDirectory()
         return (tmp as NSString).appendingPathComponent("twinsim-\(String(hash, radix: 16)).sock")

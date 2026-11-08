@@ -4,6 +4,8 @@ import UniformTypeIdentifiers
 extension UTType {
     static let androidPackage = UTType(filenameExtension: "apk", conformingTo: .data) ?? .data
     static let iosPackage = UTType(filenameExtension: "ipa", conformingTo: .data) ?? .data
+    static let windowsProgram = UTType(filenameExtension: "exe", conformingTo: .data) ?? .data
+    static let windowsInstaller = UTType(filenameExtension: "msi", conformingTo: .data) ?? .data
 }
 
 struct AppsView: View {
@@ -39,13 +41,13 @@ struct AppsView: View {
             }
         }
         .fileImporter(isPresented: $importing,
-                      allowedContentTypes: [.androidPackage, .iosPackage, .applicationBundle],
+                      allowedContentTypes: [.androidPackage, .iosPackage, .applicationBundle, .windowsProgram, .windowsInstaller],
                       allowsMultipleSelection: true) { result in
             if case let .success(urls) = result { importURLs(urls) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .twinsimImport)) { _ in importing = true }
         .dropDestination(for: URL.self) { urls, _ in
-            let accepted = urls.filter { ["apk", "ipa", "app"].contains($0.pathExtension.lowercased()) }
+            let accepted = urls.filter { ["apk", "ipa", "app", "exe", "msi"].contains($0.pathExtension.lowercased()) }
             guard !accepted.isEmpty else { return false }
             importURLs(accepted)
             return true
@@ -57,8 +59,8 @@ struct AppsView: View {
             Image(systemName: busy ? "hourglass" : "square.and.arrow.down.on.square")
                 .font(.system(size: 30)).foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 4) {
-                Text(busy ? "正在导入…" : "拖入 APK、IPA 或 Simulator .app").font(.headline)
-                Text("APK 在 Android 模拟器中运行；Simulator .app 在 iOS Simulator 中运行；真机 IPA 需要 iOS 研究虚拟机。")
+                Text(busy ? "正在导入…" : "拖入 APK、IPA、Simulator .app 或 Windows .exe/.msi").font(.headline)
+                Text("APK 在 Android 模拟器中运行；Simulator .app 在 iOS Simulator 中运行；Windows 程序通过 Wine 在 Mac 上以原生窗口运行；真机 IPA 需要 iOS 研究虚拟机。")
                     .font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
@@ -117,7 +119,8 @@ struct ArtifactCard: View {
                     Text(Labels.stage(op.stage) ?? "正在准备实例、安装并启动…").font(.caption).foregroundStyle(.secondary)
                 }
             } else if let workspace, workspace.isReady {
-                Text("后台实例运行中，打开时复用已有安装与数据").font(.caption).foregroundStyle(.secondary)
+                Text(artifact.isWindows ? "Windows 环境运行中，程序窗口直接显示在桌面上" : "后台实例运行中，打开时复用已有安装与数据")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             HStack {
                 Button {
@@ -168,6 +171,7 @@ struct ArtifactCard: View {
         let (symbol, color): (String, Color) = switch artifact.kind {
         case "apk": ("app.badge", .green)
         case "ipa": ("lock.iphone", .purple)
+        case "windowsExe", "windowsMsi": ("pc", .cyan)
         default: ("iphone.gen3", .blue)
         }
         return Image(systemName: symbol).font(.system(size: 26)).foregroundStyle(color)

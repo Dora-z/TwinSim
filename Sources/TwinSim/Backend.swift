@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 actor Backend {
@@ -8,6 +9,8 @@ actor Backend {
     private let androidVideo: AndroidVideo
     private let simulator: Simulator
     private let vphone: VPhone
+    private let windows: Wine
+    private var windowCaptures: [UUID: Wine.WindowCapture] = [:]
     private let importer: Importer
     let scratch: URL
 
@@ -27,6 +30,7 @@ actor Backend {
         androidVideo = AndroidVideo(android: android)
         simulator = Simulator(config: config, scratch: scratch)
         vphone = VPhone(config: config, scratch: scratch)
+        windows = Wine(config: config, scratch: scratch)
         if FileManager.default.fileExists(atPath: stateFile.path) {
             state = try JSONDecoder().decode(State.self, from: Data(contentsOf: stateFile))
         } else {
@@ -108,17 +112,28 @@ actor Backend {
         let reason = await vphone.blocker()
         result.append(Component(id: "ios-vphone", status: reason == nil ? "ready" : "externalSetup",
                                 source: VPhone.setupURL, reasonCode: reason))
+        if !Wine.rosettaAvailable {
+            result.append(Component(id: "windows-wine", status: "externalSetup", version: Wine.version, source: Wine.setupURL,
+                                    reasonCode: "ROSETTA_MISSING"))
+        } else {
+            result.append(Component(id: "windows-wine", status: windows.installed ? "ready" : "downloadable", version: "Wine \(Wine.version) (staging)",
+                                    source: Wine.source, downloadBytes: Wine.downloadSize, requiredFreeBytes: 1_200_000_000))
+        }
+        result.append(Component(id: "windows-dxvk", status: !windows.installed ? "blocked" : (windows.dxvkInstalled ? "ready" : "downloadable"),
+                                version: Wine.dxvkVersion, source: Wine.dxvkSource, downloadBytes: Wine.dxvkSize,
+                                reasonCode: windows.installed ? nil : "WINE_MISSING"))
         return result
     }
 
     func installComponent(_ id: String, request: InstallComponentRequest, key: String?, fingerprint: String) throws -> Operation {
         if let existing = try previous(key, fingerprint) { return existing }
-        guard ["android-engine", "android-display", "android-runtime", "android-google-apis", "ios-simulator-runtime"].contains(id) else {
+        guard ["android-engine", "android-display", "android-runtime", "android-google-apis", "ios-simulator-runtime",
+               "windows-wine", "windows-dxvk"].contains(id) else {
             throw id == "ios-vphone"
                 ? BackendError("EXTERNAL_SETUP_REQUIRED", "Set up vphone Launchpad and the host, then refresh components.")
                 : BackendError("COMPONENT_NOT_FOUND", "No such component.")
         }
-        let resource = id.hasPrefix("android-") ? "component:android" : "component:ios-simulator"
+        let resource = id.hasPrefix("android-") ? "component:android" : id.hasPrefix("windows-") ? "component:windows" : "component:ios-simulator"
         return try enqueue("install-component", resource: resource, key: key, fingerprint: fingerprint) { backend, operation in
             let update: ProgressUpdate = { stage, received, total in
                 await backend.progress(operation, stage, received, total)
@@ -131,6 +146,12 @@ actor Backend {
             case "android-runtime", "android-google-apis":
                 let profile: Profile = id == "android-runtime" ? .android : .google
                 try await backend.android.installRuntime(profile, consent: request.acceptLicenses ?? [:], update: update)
+            case "windows-wine":
+                guard Wine.rosettaAvailable else { throw BackendError("ROSETTA_MISSING", "Install Rosetta 2 first.") }
+                try await backend.windows.setup(update)
+            case "windows-dxvk":
+                guard backend.windows.installed else { throw BackendError("WINE_MISSING", "Install windows-wine first.") }
+                try await backend.windows.setupDXVK(update)
             default:
                 await update("xcode-runtime", nil, nil)
                 try await backend.simulator.setup()
@@ -153,6 +174,20 @@ actor Backend {
         let ready = device.state == "ready"
         let online: Capability = ready ? .available : .blocked("INSTANCE_NOT_READY")
         let isAndroid = device.engineId == .android
+        if device.engineId == .windows {
+            var caps: [String: Capability] = [:]
+            for key in ["installApk", "installSimulatorApp", "installDeviceIpa", "guestRoot", "writableSystem", "portForward",
+                        "snapshot", "liveVideo", "frida"] { caps[key] = .unsupported }
+            caps["installWindowsApp"] = online
+            caps["screenshot"] = online
+            caps["logs"] = online
+            caps["guestShell"] = online
+            caps["guestFiles"] = online
+            caps["windowsTools"] = online
+            caps["input"] = ready ? (Wine.inputAllowed ? .available : .blocked("ACCESSIBILITY_REQUIRED")) : online
+            caps["dxvk"] = windows.dxvkInstalled ? online : .blocked("DXVK_MISSING")
+            return InstanceView(device, capabilities: caps)
+        }
         let writableSystem: Capability
         if isAndroid, device.profileId.rootMode == "adb" {
             writableSystem = await android.supportsWritableSystem() ? online : .blocked("ANDROID_ENGINE_UPGRADE_REQUIRED")
@@ -203,6 +238,8 @@ actor Backend {
                 case "Shutting Down": runtimeState = "stopping"
                 default: runtimeState = nil
                 }
+            case .windows:
+                runtimeState = windows.isRunning(driverID) ? "ready" : "stopped"
             case .vphone:
                 let result = try await vphone.cli(["vm", "list"])
                 let json = try JSONSerialization.jsonObject(with: result.data)
@@ -276,8 +313,9 @@ actor Backend {
     func action(_ id: UUID, action: String, request: ActionRequest, key: String?, fingerprint: String) throws -> Operation {
         if let existing = try previous(key, fingerprint) { return existing }
         let device = try device(id)
-        guard ["start", "stop", "install", "launch", "root", "writable-system", "snapshot-save",
-               "snapshot-load", "tap", "key", "shell", "uninstall", "guest-push", "forward", "unforward"].contains(action) else {
+        guard ["start", "stop", "delete", "install", "launch", "root", "writable-system", "snapshot-save",
+               "snapshot-load", "tap", "key", "text", "shell", "uninstall", "guest-push", "forward", "unforward",
+               "wine-tool", "dxvk", "display"].contains(action) else {
             throw BackendError("ACTION_NOT_FOUND", "No such instance action.")
         }
         if action == "install" {
@@ -296,6 +334,8 @@ actor Backend {
             try await start(id)
         case "stop":
             try await stop(id)
+        case "delete":
+            return try await delete(id)
         case "install":
             guard let artifactId = request.artifactId else { throw BackendError("INVALID_ARTIFACT", "Specify an artifactId.") }
             try await install(id, artifact(artifactId))
@@ -322,6 +362,7 @@ actor Backend {
         case .android: driverID = try await android.create(device)
         case .simulator: driverID = try await simulator.create(device)
         case .vphone: driverID = try await vphone.create(device, externalName: device.externalName)
+        case .windows: driverID = try await windows.create(device)
         }
         device.driverID = driverID
         device.state = "stopped"
@@ -345,6 +386,8 @@ actor Backend {
             try await simulator.start(driver)
         case .vphone:
             _ = try await vphone.cli(["vm", "start", driver, "--headless", "--wait", "--timeout", "240"], timeout: 260)
+        case .windows:
+            try await windows.start(driver)
         }
         device.state = "ready"
         try put(device)
@@ -360,12 +403,56 @@ actor Backend {
         case .android: try await android.stop(driver)
         case .simulator: try await simulator.stop(driver)
         case .vphone: _ = try await vphone.cli(["vm", "stop", driver])
+        case .windows: try await windows.stop(driver)
         }
+        windowCaptures[id] = nil
         device.state = "stopped"
         device.guestUid = nil
         device.selinux = nil
         device.forwardedPorts = nil
         try put(device)
+    }
+
+    /// Stops the instance if needed, deletes its engine resources and forgets it. Android AVDs and
+    /// Simulator devices are deleted with their data; a vphone VM is only unregistered, because its
+    /// files belong to the vphone library.
+    private func delete(_ id: UUID) async throws -> [String: String] {
+        let device = try device(id)
+        var detail = "deleted"
+        if let driver = device.driverID {
+            if device.state != "stopped" {
+                do { try await stop(id) }
+                catch where device.state == "unknown" || device.state == "failed" { /* engine may already be gone */ }
+            }
+            switch device.engineId {
+            case .android:
+                do {
+                    _ = try await android.cli(["device", "delete", "--yes", driver], timeout: 180)
+                } catch {
+                    // Already gone from the engine: nothing left to delete.
+                    let known = (try? await android.devices())?.contains { $0["id"] as? String == driver } ?? true
+                    if known { throw error }
+                }
+            case .simulator:
+                do {
+                    _ = try await simulator.call(["delete", driver], timeout: 120)
+                } catch {
+                    let known = (try? await simulator.devices())?.contains { $0["udid"] as? String == driver } ?? true
+                    if known { throw error }
+                }
+            case .vphone:
+                detail = "unregistered"
+            case .windows:
+                if windows.isRunning(driver) { try? await windows.stop(driver) }
+                try? FileManager.default.removeItem(at: windows.prefix(driver))
+                try? FileManager.default.removeItem(at: windows.log(driver))
+            }
+        }
+        state.instances[id] = nil
+        streaming.remove(id)
+        try save()
+        publish("instance-deleted", ["id": id.uuidString, "result": detail])
+        return ["instanceId": id.uuidString, "result": detail]
     }
 
     private func install(_ id: UUID, _ artifact: Artifact) async throws {
@@ -386,6 +473,8 @@ actor Backend {
             }
         case .vphone:
             try await vphone.install(driver, path)
+        case .windows:
+            try windows.install(driver, artifact, from: path)
         }
         device.installed[artifact.bundleId] = artifact.id
         try put(device)
@@ -398,6 +487,11 @@ actor Backend {
         case .android: try await android.launch(driver, bundle: bundle)
         case .simulator: _ = try await simulator.call(["launch", driver, bundle])
         case .vphone: _ = try await vphone.rpc(driver, "apps.launch", ["bundle_id": bundle])
+        case .windows:
+            guard let artifactID = device.installed[bundle], let artifact = state.artifacts[artifactID] else {
+                throw BackendError("APP_NOT_INSTALLED", "Install the program on this device first.")
+            }
+            try windows.launch(driver, artifact)
         }
     }
 
@@ -410,6 +504,10 @@ actor Backend {
         case .android: _ = try await android.adb(driver, ["uninstall", bundle])
         case .simulator: _ = try await simulator.call(["uninstall", driver, bundle])
         case .vphone: _ = try await vphone.rpc(driver, "apps.uninstall", ["bundle_id": bundle, "force": true])
+        case .windows:
+            if let artifactID = device.installed[bundle], let artifact = state.artifacts[artifactID] {
+                try? FileManager.default.removeItem(at: windows.appDirectory(driver, artifact))
+            }
         }
         device.installed[bundle] = nil
         try put(device)
@@ -499,6 +597,60 @@ actor Backend {
                 throw error
             }
             return ["host": "127.0.0.1", "localPort": String(localPort), "guestPort": String(guestPort)]
+        case (.windows, "tap"):
+            guard let x = request.x, let y = request.y, (0...10000).contains(x), (0...10000).contains(y) else {
+                throw BackendError("INVALID_INPUT", "Specify nonnegative coordinates in the latest screenshot.")
+            }
+            let capture = try await windowCapture(id, driver)
+            let point = CGPoint(x: capture.bounds.minX + Double(x) * capture.bounds.width / max(1, capture.pixelSize.width),
+                                y: capture.bounds.minY + Double(y) * capture.bounds.height / max(1, capture.pixelSize.height))
+            await MainActor.run { Wine.activate(capture.owner) }
+            try await Task.sleep(for: .milliseconds(120))
+            try Wine.click(at: point)
+            return ["x": String(Int(point.x)), "y": String(Int(point.y))]
+        case (.windows, "key"), (.windows, "text"):
+            guard let value = request.value, !value.isEmpty, value.count <= 4000 else {
+                throw BackendError("INVALID_INPUT", "Specify a key name or text.")
+            }
+            let capture = try await windowCapture(id, driver)
+            await MainActor.run { Wine.activate(capture.owner) }
+            try await Task.sleep(for: .milliseconds(120))
+            if action == "key" { try Wine.key(value) } else { try Wine.type(value) }
+        case (.windows, "shell"):
+            guard let args = request.argv, !args.isEmpty, args.count <= 64,
+                  args.allSatisfy({ $0.utf8.count < 16_384 && !$0.contains("\0") }) else {
+                throw BackendError("INVALID_COMMAND", "Specify a guest command as an argument array, e.g. [\"cmd\", \"/c\", \"ver\"].")
+            }
+            let output = try await windows.wine(driver, args, timeout: 60, check: false)
+            return ["stdout": String(output.text.replacingOccurrences(of: "\r\n", with: "\n").prefix(1 << 20)),
+                    "stderr": output.stderr, "exitCode": String(output.code)]
+        case (.windows, "guest-push"):
+            let local = URL(fileURLWithPath: try Self.absolutePath(request.localPath)).resolvingSymlinksInPath()
+            guard try local.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
+                throw BackendError("INVALID_FILE", "Select a regular local file.")
+            }
+            let target = try windows.hostPath(driver, windowsPath: request.remotePath ?? "")
+            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(at: target)
+            try FileManager.default.copyItem(at: local, to: target)
+        case (.windows, "wine-tool"):
+            guard let value = request.value, let args = Wine.tools[value] else {
+                throw BackendError("INVALID_ACTION", "Specify one of: \(Wine.tools.keys.sorted().joined(separator: ", ")).")
+            }
+            try windows.spawn(driver, args)
+        case (.windows, "dxvk"):
+            guard let value = request.value, ["on", "off"].contains(value) else { throw BackendError("INVALID_ACTION", "Specify on or off.") }
+            if value == "on" && !windows.dxvkInstalled { throw BackendError("DXVK_MISSING", "Install the windows-dxvk component first.") }
+            var settings = windows.settings(driver)
+            settings.dxvk = value == "on"
+            try windows.save(settings, driver)
+            return ["dxvk": value, "note": "Applies to programs started from now on."]
+        case (.windows, "display"):
+            guard let value = request.value, ["retina", "standard"].contains(value) else {
+                throw BackendError("INVALID_ACTION", "Specify retina or standard.")
+            }
+            try await windows.applyDisplay(driver, retina: value == "retina")
+            return ["display": value, "note": "Restart running programs to apply."]
         case (.android, "unforward"):
             guard let localPort = request.localPort, device.forwardedPorts?.contains(localPort) == true else {
                 throw BackendError("FORWARD_NOT_FOUND", "No managed forward uses that port.")
@@ -521,9 +673,17 @@ actor Backend {
     }
 
     func pull(_ id: UUID, remotePath: String?) async throws -> Data {
-        let remote = try Self.absolutePath(remotePath)
         _ = try await refresh(id)
         let device = try running(id)
+        if device.engineId == .windows, let driver = device.driverID {
+            let url = try windows.hostPath(driver, windowsPath: remotePath ?? "")
+            let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            guard values?.isRegularFile == true, values?.isSymbolicLink != true, Files.size(url) <= 128 << 20 else {
+                throw BackendError("GUEST_FILE_UNSUPPORTED", "Select a regular file on C: of at most 128 MB.")
+            }
+            return try Data(contentsOf: url)
+        }
+        let remote = try Self.absolutePath(remotePath)
         guard let driver = device.driverID else { throw BackendError("INSTANCE_UNAVAILABLE", "Missing device identifier.") }
         let folder = try Files.scratch(in: scratch)
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -539,7 +699,7 @@ actor Backend {
             }
             _ = try await android.adb(driver, ["pull", remote, output.path], timeout: 600)
         case .vphone: _ = try await vphone.cli(["guest", "pull", driver, remote, output.path], timeout: 600)
-        case .simulator: throw BackendError("CAPABILITY_UNSUPPORTED", "Guest transfer is unavailable for this engine.")
+        case .simulator, .windows: throw BackendError("CAPABILITY_UNSUPPORTED", "Guest transfer is unavailable for this engine.")
         }
         let file = try output.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
         guard file.isRegularFile == true, file.isSymbolicLink != true,
@@ -567,6 +727,10 @@ actor Backend {
                 throw BackendError("INVALID_TOOL_RESPONSE", "The Simulator did not produce a PNG screenshot.")
             }
             return ("image/png", image)
+        case .windows:
+            let (data, capture) = try await windows.capture(driver)
+            windowCaptures[id] = capture
+            return ("image/png", data)
         case .vphone:
             let output = try await vphone.rpc(driver, "screen.screenshot") as? [String: Any]
             let encoded = (output?["data"] ?? output?["data_base64"] ?? output?["base64"]) as? String
@@ -590,6 +754,8 @@ actor Backend {
             return output.text.split(whereSeparator: \.isNewline).suffix(limit).joined(separator: "\n")
         case .vphone:
             return try await vphone.cli(["vm", "log", driver, "--lines", String(limit)]).text
+        case .windows:
+            return windows.logs(driver, lines: limit)
         }
     }
 
@@ -622,7 +788,20 @@ actor Backend {
         case .android: .android
         case .simulator: .simulator
         case .vphone: .vphone
+        case .windows: .windows
         }
+    }
+
+    /// Latest captured window (used to map screenshot pixels to screen points), capturing if needed.
+    private func windowCapture(_ id: UUID, _ driver: String) async throws -> Wine.WindowCapture {
+        // Reuse the last screenshot's pixel size while the same window keeps its size (it may have moved).
+        if let capture = windowCaptures[id], let (window, bounds, owner) = windows.mainWindow(driver),
+           window == capture.windowID, bounds.size == capture.bounds.size {
+            return Wine.WindowCapture(windowID: window, bounds: bounds, pixelSize: capture.pixelSize, owner: owner)
+        }
+        let (_, capture) = try await windows.capture(driver)
+        windowCaptures[id] = capture
+        return capture
     }
 
     private func compatible(_ device: Device, _ artifact: Artifact) throws {

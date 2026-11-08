@@ -70,13 +70,15 @@ final class SelfTest {
         check("SSE subscribed (reset handled)", await waitUntil(10) { store.eventsConnected && store.eventCount > 0 },
               "events \(store.eventCount)")
         log("components: " + store.components.map { "\($0.id)=\($0.status)\($0.reasonCode.map { "(\($0))" } ?? "")" }.joined(separator: ", "))
-        snapshotMain("01-components", select: .components)
+        await snapshotMain("01-components", select: .components)
 
         if platforms.contains("android") { await android() }
         if platforms.contains("ios") { await ios() }
         if platforms.contains("ipa") { await ipa() }
         if platforms.contains("device") { await devices() }
-        snapshotMain("09-devices", select: .devices)
+        if platforms.contains("data") { await dataMove() }
+        if platforms.contains("windows") { await windowsPlatform() }
+        await snapshotMain("09-devices", select: .devices)
         renderOffscreen(AISettingsView().environment(store), size: CGSize(width: 640, height: 1000), "12-ai-settings")
         check("agent bridge listening", store.agentBridge?.isListening == true, store.agentBridge?.path ?? "")
         finish()
@@ -97,7 +99,7 @@ final class SelfTest {
         check("APK import", apk.kind == "apk" && apk.bundleId == "org.twinsim.touchprobe", "\(apk.bundleId) \(apk.sha256.prefix(12))")
         let again = await store.importFiles([samples.appendingPathComponent("TouchProbe.apk")]).first
         check("APK re-import deduplicated", again?.id == apk.id)
-        snapshotMain("02-apps", select: .apps)
+        await snapshotMain("02-apps", select: .apps)
 
         var t = Date()
         await store.open(apk)
@@ -257,6 +259,190 @@ final class SelfTest {
         closeWindows()
     }
 
+    // MARK: Windows (Wine)
+
+    private func windowsPlatform() async {
+        log("== Windows (Wine) ==")
+        for id in ["windows-wine", "windows-dxvk"] {
+            if let c = store.component(id), !c.isReady {
+                let t = Date()
+                log("installing \(id) (\(c.status))")
+                await store.installComponent(c, accepting: [])
+                check("component \(id) installed", store.component(id)?.isReady == true, String(format: "%.0fs", Date().timeIntervalSince(t)))
+            } else {
+                check("component \(id) installed", store.component(id)?.isReady == true, store.component(id)?.status ?? "missing")
+            }
+        }
+        guard store.component("windows-wine")?.isReady == true else { return }
+        // Real Windows programs shipped with Wine: 32-bit Minesweeper and 64-bit Notepad.
+        let lib = URL(fileURLWithPath: store.dataDirectory)
+            .appendingPathComponent("runtime/wine-staging-11.21/Wine Staging.app/Contents/Resources/wine/lib/wine")
+        let samples = out.appendingPathComponent("samples")
+        try? FileManager.default.createDirectory(at: samples, withIntermediateDirectories: true)
+        let mine = samples.appendingPathComponent("winemine32.exe"), pad = samples.appendingPathComponent("notepad64.exe")
+        try? FileManager.default.removeItem(at: mine); try? FileManager.default.removeItem(at: pad)
+        try? FileManager.default.copyItem(at: lib.appendingPathComponent("i386-windows/winemine.exe"), to: mine)
+        try? FileManager.default.copyItem(at: lib.appendingPathComponent("x86_64-windows/notepad.exe"), to: pad)
+        let imported = await store.importFiles([mine, pad])
+        guard imported.count == 2 else { check("import .exe (x86 + x64)", false, "\(store.notices.last?.message ?? "")"); return }
+        check("import .exe (x86 + x64)", imported.allSatisfy { $0.kind == "windowsExe" }, imported.map(\.bundleId).joined(separator: ", "))
+
+        var t = Date()
+        await store.open(imported[0])
+        guard let ws = store.instances.first(where: { $0.isWindows && $0.isAppWorkspace }), ws.isReady else {
+            check("open 32-bit program (creates Wine prefix)", false, store.notices.last?.message ?? ""); return
+        }
+        check("open 32-bit program (creates Wine prefix)", true, String(format: "%.1fs", Date().timeIntervalSince(t)))
+        check("no TwinSim mirror window for Windows apps", store.screenSession(ws.id) == nil)
+        var shot: Data?
+        var lastError = ""
+        let deadline = Date().addingTimeInterval(60)
+        while Date() < deadline, shot == nil {
+            do { shot = try await store.client?.screenshot(ws.id) } catch { lastError = error.localizedDescription; try? await Task.sleep(for: .seconds(1)) }
+        }
+        if let shot, let image = NSImage(data: shot) {
+            try? shot.write(to: out.appendingPathComponent("20-windows-winemine.png"))
+            check("program window on screen + captured", true, "\(Int(image.size.width))×\(Int(image.size.height)) pt image")
+        } else {
+            check("program window on screen + captured", false, lastError)
+        }
+
+        if let op = try? await store.perform(ws.id, "shell", body: ["argv": ["cmd", "/c", "ver & echo %PROCESSOR_ARCHITECTURE% & echo %WINEDLLPATH_PREPEND%"]], timeout: 120) {
+            let outText = (op.result?["stdout"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            check("cmd shell", op.result?["exitCode"] == "0" && outText.contains("Windows"), outText.replacingOccurrences(of: "\n", with: " | "))
+        } else { check("cmd shell", false, store.notices.last?.message ?? "") }
+
+        let note = FileManager.default.temporaryDirectory.appendingPathComponent("twinsim-wine-\(UUID().uuidString).txt")
+        try? "hello from macOS".write(to: note, atomically: true, encoding: .utf8)
+        let pushed = (try? await store.perform(ws.id, "guest-push", body: ["localPath": note.path, "remotePath": #"C:\users\Public\twinsim.txt"#])) != nil
+        let pulled = try? await store.client?.guestFile(ws.id, path: #"C:\users\Public\twinsim.txt"#)
+        check("file push/pull via C:\\", pushed && pulled.map { String(decoding: $0, as: UTF8.self) } == "hello from macOS")
+
+        t = Date()
+        await store.open(imported[1])
+        let reused = store.instances.filter { $0.isWindows && $0.isAppWorkspace }.count == 1
+        check("open 64-bit program on the same prefix", reused && store.instance(ws.id)?.isReady == true, String(format: "%.1fs", Date().timeIntervalSince(t)))
+        try? await Task.sleep(for: .seconds(3))
+        if store.instance(ws.id)?.can("input") == true {
+            let before = try? await store.client?.screenshot(ws.id)
+            let typed = (try? await store.perform(ws.id, "text", body: ["value": "TwinSim on Wine"], timeout: 60)) != nil
+            try? await Task.sleep(for: .seconds(1))
+            let after = try? await store.client?.screenshot(ws.id)
+            if let after { try? after.write(to: out.appendingPathComponent("21-windows-notepad-typed.png")) }
+            check("type into Notepad (CGEvent)", typed && before != after, "screenshot changed: \(before != after)")
+        } else {
+            check("input needs Accessibility permission", true, store.instance(ws.id)?.capability("input")?.reasonCode ?? "")
+        }
+
+        _ = try? await store.perform(ws.id, "dxvk", body: ["value": "on"], timeout: 60)
+        if let op = try? await store.perform(ws.id, "shell", body: ["argv": ["cmd", "/c", "echo %WINEDLLPATH_PREPEND%|%DXVK_ASYNC%"]], timeout: 60) {
+            let text = (op.result?["stdout"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            check("DXVK enabled for new programs", text.contains("dxvk") && text.hasSuffix("|1"), text)
+        }
+        _ = try? await store.perform(ws.id, "display", body: ["value": "standard"], timeout: 120)
+        if let op = try? await store.perform(ws.id, "shell", body: ["argv": ["cmd", "/c", #"reg query "HKCU\Software\Wine\Mac Driver" /v RetinaMode"#]], timeout: 60) {
+            check("display mode switch (registry)", (op.result?["stdout"] ?? "").contains("n"), (op.result?["stdout"] ?? "").replacingOccurrences(of: "\n", with: " "))
+        }
+        _ = try? await store.perform(ws.id, "display", body: ["value": "retina"], timeout: 120)
+        _ = try? await store.perform(ws.id, "wine-tool", body: ["value": "winecfg"], timeout: 60)
+
+        t = Date()
+        let stopped = (try? await store.perform(ws.id, "stop", timeout: 120)) != nil
+        await store.refreshInstance(ws.id)
+        check("stop Windows device (all programs closed)", stopped && store.instance(ws.id)?.state == "stopped", String(format: "%.1fs", Date().timeIntervalSince(t)))
+        let prefix = URL(fileURLWithPath: store.dataDirectory).appendingPathComponent("wine/prefixes/twinsim-\(ws.id.uuidString.lowercased())")
+        check("delete Windows device removes prefix", await store.deleteInstance(ws.id) && !FileManager.default.fileExists(atPath: prefix.path))
+    }
+
+    // MARK: Data directory move + delete
+
+    private func dataMove() async {
+        log("== Data location ==")
+        let env = ProcessInfo.processInfo.environment
+        guard let destination = env["TWINSIM_SELF_TEST_MOVE_TO"] else { check("data move target", false, "TWINSIM_SELF_TEST_MOVE_TO unset"); return }
+        let source = store.dataDirectory
+        check("starts from custom data directory", !store.dataDirectoryIsDefault && !store.dataDirectoryLockedByEnvironment, source)
+        let before = Set(store.instances.map(\.id))
+        log("devices before: " + store.instances.map { "\($0.displayName)/\($0.profileId)/\($0.state)" }.joined(separator: ", "))
+        guard let android = store.instances.first(where: \.isAndroid), let ios = store.instances.first(where: \.isSimulator) else {
+            check("seeded devices present", false); return
+        }
+        await store.run(android.id, "start")
+        check("android running before move", store.instance(android.id)?.isReady == true)
+
+        let bytes = DataLocation.size(of: source)
+        do { try DataLocation.validate(destination: destination, current: source, requiredBytes: bytes); check("destination validated", true, "\(Labels.bytes(bytes)) → \(destination)") }
+        catch { check("destination validated", false, error.localizedDescription); return }
+        if let v = DataLocation.volume(of: destination) { log("destination volume: \(v.name) \(v.format) removable/external=\(v.isRemovable)") }
+        var t = Date()
+        var maxProgress = 0.0
+        let watcher = Task { @MainActor in
+            while !Task.isCancelled {
+                if case .migrating(let p, _) = store.connection { maxProgress = max(maxProgress, p) }
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+        }
+        await store.moveData(to: destination, deleteOld: true)
+        watcher.cancel()
+        check("move completed and backend restarted", store.isConnected && store.dataDirectory == destination,
+              String(format: "%.1fs, progress reached %.0f%%", Date().timeIntervalSince(t), maxProgress * 100))
+        check("old location deleted", !FileManager.default.fileExists(atPath: source))
+        check("devices preserved", Set(store.instances.map(\.id)) == before, "\(store.instances.count) devices")
+        let avdDir = destination + "/jidr/data/avd"
+        let inis = (try? FileManager.default.contentsOfDirectory(atPath: avdDir).filter { $0.hasSuffix(".ini") }) ?? []
+        let rewritten = inis.allSatisfy { ((try? String(contentsOfFile: avdDir + "/" + $0, encoding: .utf8)) ?? "").contains("path=" + destination) }
+        check("AVD paths rewritten", !inis.isEmpty && rewritten, inis.joined(separator: ","))
+        check("android stopped for the move", store.instance(android.id)?.state == "stopped")
+
+        // The CLI finds the app through the data directory chosen in Settings.
+        if let cli = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/twinsim") as URL?,
+           FileManager.default.isExecutableFile(atPath: cli.path) {
+            let out = await Task.detached { () -> String in
+                let p = Process(); p.executableURL = cli; p.arguments = ["status"]
+                var e = ProcessInfo.processInfo.environment; e["TWINSIM_HOME"] = nil; e["TWINSIM_NO_LAUNCH"] = "1"; p.environment = e
+                let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
+                try? p.run(); p.waitUntilExit()
+                return String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            }.value
+            check("twinsim CLI connects after move", out.contains(destination), out.split(separator: "\n").first(where: { $0.contains("dataDirectory") }).map(String.init) ?? out.prefix(200).description)
+        }
+
+        for target in [android, ios] {
+            t = Date()
+            await store.run(target.id, "start")
+            let ok = store.instance(target.id)?.isReady == true
+            var detail = String(format: "%.1fs", Date().timeIntervalSince(t))
+            if ok, let data = try? await store.client?.screenshot(target.id), let size = NSImage(data: data)?.size { detail += " screenshot \(Int(size.width))×\(Int(size.height))" }
+            check("\(target.isAndroid ? "android" : "ios") boots from new location", ok, detail)
+        }
+
+        // Unplugged drive: a missing custom directory must not start the backend.
+        BackendSettings.dataDirectory = "/Volumes/TwinSimMissingDisk/TwinSim"
+        await store.restartBackend()
+        check("missing drive detected", store.dataDirectoryMissing && !store.isConnected,
+              { if case .failed(let m, _) = store.connection { return m }; return "\(store.connection)" }())
+        check("no folder created for missing drive", !FileManager.default.fileExists(atPath: "/Volumes/TwinSimMissingDisk"))
+        BackendSettings.dataDirectory = destination
+        await store.restartBackend()
+        _ = await waitUntil(60) { store.instance(android.id)?.isReady == true }
+        check("reconnected after drive returns", store.isConnected, "android \(store.instance(android.id)?.state ?? "?")")
+
+        // Delete: a running Android device and a running Simulator device.
+        let avdName = "twinsim-" + android.id.uuidString.lowercased()
+        t = Date()
+        check("delete running android device", await store.deleteInstance(android.id), String(format: "%.1fs", Date().timeIntervalSince(t)))
+        check("android removed from list and disk", store.instance(android.id) == nil
+              && !FileManager.default.fileExists(atPath: avdDir + "/\(avdName).avd") && !FileManager.default.fileExists(atPath: avdDir + "/\(avdName).ini"))
+        let simDevices = (try? FileManager.default.contentsOfDirectory(atPath: destination + "/simulators").filter { UUID(uuidString: $0) != nil }) ?? []
+        t = Date()
+        check("delete running ios device", await store.deleteInstance(ios.id), String(format: "%.1fs", Date().timeIntervalSince(t)))
+        let simAfter = (try? FileManager.default.contentsOfDirectory(atPath: destination + "/simulators").filter { UUID(uuidString: $0) != nil }) ?? []
+        check("simulator device removed from disk", store.instance(ios.id) == nil && simAfter.count == simDevices.count - 1,
+              "\(simDevices.count) → \(simAfter.count) device folders")
+        await store.refreshInstance(android.id)
+        check("deleted devices stay deleted after resync", store.instance(android.id) == nil && store.instance(ios.id) == nil)
+    }
+
     // MARK: Devices page (full devices)
 
     private func devices() async {
@@ -328,7 +514,7 @@ final class SelfTest {
         let notice = store.notices.last { !before.contains($0.id) }
         check("blocking prompt shown", notice != nil && notice?.code == vphone?.reasonCode && notice?.link != nil,
               "\(notice?.title ?? ""): \(notice?.message ?? "") link \(notice?.link?.absoluteString ?? "-")")
-        snapshotMain("08-ipa-blocked", select: .apps)
+        await snapshotMain("08-ipa-blocked", select: .apps)
         // The backend path reports the same reason when a launch is forced.
         do {
             let accepted = try await store.submit { client, key in
@@ -360,13 +546,11 @@ final class SelfTest {
         try? rep.representation(using: .png, properties: [:])?.write(to: out.appendingPathComponent(name + ".png"))
     }
 
-    private func snapshotMain(_ name: String, select: SidebarItem) {
+    private func snapshotMain(_ name: String, select: SidebarItem) async {
         NotificationCenter.default.post(name: .twinsimSelect, object: select.rawValue)
-        Task {
-            try? await Task.sleep(for: .seconds(1.5))
-            if let window = NSApp.windows.first(where: { $0.title == "TwinSim" || $0.identifier?.rawValue.hasPrefix("main") == true }) {
-                self.snapshot(window, name)
-            }
+        try? await Task.sleep(for: .seconds(1.5))
+        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix("main") == true || $0.title == "TwinSim" }) {
+            snapshot(window, name)
         }
     }
 

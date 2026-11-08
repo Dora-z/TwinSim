@@ -113,7 +113,7 @@ struct ScreenWindow: View {
                 if let error = session.lastInputError {
                     Text("输入失败：\(error)").foregroundStyle(.red).lineLimit(2)
                 }
-                if instance?.isAndroid == true && instance?.can("guestShell") == true {
+                if (instance?.isAndroid == true && instance?.can("guestShell") == true) || (instance?.isWindows == true && instance?.can("input") == true) {
                     HStack {
                         TextField("向客体输入文本", text: $text).textFieldStyle(.roundedBorder)
                             .onSubmit { session.typeText(text); text = "" }
@@ -129,7 +129,11 @@ struct ScreenWindow: View {
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
-            if let instance, instance.can("input") {
+            if let instance, instance.can("input"), instance.isWindows {
+                Button { session?.key("escape") } label: { Label("Esc", systemImage: "escape") }.help("Esc")
+                Button { session?.key("enter") } label: { Label("回车", systemImage: "return") }.help("回车")
+            }
+            if let instance, instance.can("input"), !instance.isWindows {
                 Button { session?.key("KEYCODE_BACK") } label: { Label("返回", systemImage: "chevron.backward") }
                     .help("返回")
                 Button { session?.key("KEYCODE_HOME") } label: { Label("主屏幕", systemImage: "circle") }

@@ -224,6 +224,12 @@ try:
 
     err, _, _, _ = mcp.call("show_device", device=android or ios)
     check("show_device", not err)
+    # Permanent deletion through MCP (iOS workspace; recreated on the next open_app).
+    if ios:
+        err, text, _, _ = mcp.call("delete_device", device=ios)
+        listed = mcp.call("list_devices")[1]
+        check("delete_device removes the device", not err and ios not in listed, text)
+        ios = None
 finally:
     for device in [android, ios]:
         if device:

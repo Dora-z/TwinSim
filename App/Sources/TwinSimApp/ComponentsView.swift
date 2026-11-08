@@ -20,6 +20,7 @@ struct ComponentsView: View {
                         if refreshing { ProgressView().controlSize(.small) } else { Label("重新检查", systemImage: "arrow.clockwise") }
                     }
                 }
+                InstallLocationBanner()
                 if store.components.isEmpty {
                     ProgressView().frame(maxWidth: .infinity)
                 }
@@ -29,6 +30,30 @@ struct ComponentsView: View {
             }
             .padding(24)
         }
+    }
+}
+
+/// Where components are installed, with a shortcut to move them (e.g. to an external drive).
+struct InstallLocationBanner: View {
+    @Environment(AppStore.self) private var store
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some View {
+        let volume = DataLocation.volume(of: store.dataDirectory)
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: volume?.isRemovable == true ? "externaldrive.fill" : "internaldrive.fill")
+                .font(.title2).foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("安装位置：\(volume?.name ?? "")\(volume?.isRemovable == true ? "（外置）" : "")").font(.headline)
+                Text(store.dataDirectory).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                Text("Android 引擎和运行环境（AOSP / Google APIs 镜像、Emulator）、Windows 运行环境（Wine、DXVK）与 Windows 设备、实时画面组件和所有设备都放在这里，可在设置中移到外置硬盘。iOS Simulator runtime 由 Xcode 安装在系统磁盘。")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button("更改位置…") { openSettings() }
+        }
+        .padding(12)
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
     }
 }
 

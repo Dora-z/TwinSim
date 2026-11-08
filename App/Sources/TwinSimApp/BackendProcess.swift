@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import TwinSimAgentProtocol
 
 /// Optional host paths passed to the helper. Empty values are not exported.
 struct BackendSettings: Equatable, Sendable {
@@ -17,6 +18,19 @@ struct BackendSettings: Equatable, Sendable {
     func save(_ defaults: UserDefaults = .standard) {
         defaults.set(androidHome, forKey: Self.androidHomeKey)
         defaults.set(developerDir, forKey: Self.developerDirKey)
+    }
+
+    /// Data directory chosen in Settings; nil means the default location. `TWINSIM_HOME` in the
+    /// app's own environment (tests) takes precedence.
+    static var dataDirectory: String? {
+        get { UserDefaults.standard.string(forKey: AgentProtocol.dataDirectoryKey).flatMap { $0.isEmpty ? nil : $0 } }
+        set {
+            if let newValue, newValue != AgentProtocol.defaultDataDirectory {
+                UserDefaults.standard.set(newValue, forKey: AgentProtocol.dataDirectoryKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: AgentProtocol.dataDirectoryKey)
+            }
+        }
     }
 }
 
@@ -54,6 +68,7 @@ final class BackendProcess: @unchecked Sendable {
             env["ANDROID_SDK_ROOT"] = settings.androidHome
         }
         if !settings.developerDir.isEmpty { env["DEVELOPER_DIR"] = settings.developerDir }
+        env["TWINSIM_HOME"] = AgentProtocol.dataDirectory(environment: inherited)
         self.environment = env
     }
 
@@ -182,6 +197,8 @@ final class BackendProcess: @unchecked Sendable {
     }
 
     /// Sends SIGTERM, then SIGKILL after a grace period.
+    var helperDirectory: URL { executable.deletingLastPathComponent() }
+
     func terminate(grace: TimeInterval = 6) {
         lock.lock()
         intentionalStop = true
@@ -203,7 +220,7 @@ enum HelperRegistry {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("com.twinsim.app", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        let home = ProcessInfo.processInfo.environment["TWINSIM_HOME"] ?? "default"
+        let home = AgentProtocol.dataDirectory()
         var hash = UInt64(14_695_981_039_346_656_037)
         for byte in home.utf8 { hash = (hash ^ UInt64(byte)) &* 1_099_511_628_211 }
         return base.appendingPathComponent("helper-\(String(hash, radix: 16)).pid")

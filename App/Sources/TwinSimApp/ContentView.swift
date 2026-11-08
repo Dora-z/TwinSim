@@ -76,6 +76,14 @@ struct ContentView: View {
                     BackendFailureView(message: message, diagnostics: diagnostics)
                 case .idle, .starting:
                     ProgressView("正在启动后端…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .migrating(let progress, let detail):
+                    VStack(spacing: 14) {
+                        Text("正在移动 TwinSim 数据").font(.title2.bold())
+                        ProgressView(value: progress).frame(width: 360)
+                        Text("\(Int(progress * 100))% · \(detail)").foregroundStyle(.secondary).monospacedDigit()
+                        Text("请勿拔出外置硬盘或退出 TwinSim。").font(.callout).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .restarting(let attempt, let delay):
                     ProgressView("后端意外退出，\(delay) 秒后第 \(attempt) 次重启…").frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -111,6 +119,7 @@ struct ConnectionFooter: View {
         switch store.connection {
         case .connected: store.eventsConnected ? .green : .yellow
         case .failed: .red
+        case .migrating: .blue
         default: .orange
         }
     }
@@ -118,7 +127,8 @@ struct ConnectionFooter: View {
     private var text: String {
         switch store.connection {
         case .connected: store.eventsConnected ? "后端已连接" : "后端已连接，事件流重连中"
-        case .failed: "后端不可用"
+        case .failed: store.dataDirectoryMissing ? "数据目录不可用" : "后端不可用"
+        case .migrating: "正在移动数据"
         case .restarting: "后端重启中"
         default: "后端启动中"
         }
@@ -149,8 +159,12 @@ struct BackendFailureView: View {
                 }
             }
             HStack {
-                Button("重新启动后端") { Task { await store.restartBackend() } }
+                Button(store.dataDirectoryMissing ? "已连接硬盘，重试" : "重新启动后端") { Task { await store.restartBackend() } }
                     .buttonStyle(.borderedProminent)
+                if store.dataDirectoryMissing && !store.dataDirectoryLockedByEnvironment {
+                    Button("改用默认位置（新数据）") { Task { await store.switchDataDirectory(to: nil) } }
+                        .help("原位置的数据不会被删除；重新连接硬盘后可在设置中切换回去。")
+                }
                 Button("设置…") { openSettings() }
             }
             Spacer()

@@ -22,6 +22,7 @@ struct SettingsView: View {
                 Text("留空时由后端自动选择。修改后会重新启动后端，已运行的设备继续由引擎管理并重新核对状态。")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            DataLocationSection()
             Section("后端") {
                 LabeledContent("状态") { Text(statusText) }
                 if let path = store.helperPath {
@@ -65,6 +66,7 @@ struct SettingsView: View {
         case .connected: "已连接"
         case .failed(let message, _): "不可用：\(message)"
         case .restarting: "重启中"
+        case .migrating(let progress, _): "正在移动数据 \(Int(progress * 100))%"
         default: "启动中"
         }
     }

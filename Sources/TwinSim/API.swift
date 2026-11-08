@@ -83,7 +83,8 @@ func configure(_ app: Application, backend: Backend, configuration: Configuratio
             let profiles = Profile.allCases.filter { $0.engine == engine }
             let ids = Set(profiles.map(\.component))
             return EngineView(engineId: engine, profiles: profiles,
-                              componentIds: (engine == .android ? ["android-engine", "android-display"] : []) + ids.sorted())
+                              componentIds: (engine == .android ? ["android-engine", "android-display"] : [])
+                                + ids.sorted() + (engine == .windows ? ["windows-dxvk"] : []))
         })
     }
     api.get("components") { _ in try await json(backend.components()) }

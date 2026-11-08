@@ -20,6 +20,12 @@ app=$dist/TwinSim.app
 version=${TWINSIM_VERSION:-0.1.0}
 build=${TWINSIM_BUILD_NUMBER:-$(date +%Y%m%d%H%M)}
 identity=${TWINSIM_SIGN_IDENTITY:-}
+# Without a Developer ID, prefer the stable local identity from
+# scripts/create-local-signing-identity.sh so macOS privacy approvals survive rebuilds.
+local_identity=""
+if [[ -z $identity ]] && security find-certificate -c "${TWINSIM_LOCAL_IDENTITY:-TwinSim Local Signing}" >/dev/null 2>&1; then
+    local_identity=${TWINSIM_LOCAL_IDENTITY:-TwinSim Local Signing}
+fi
 
 if [[ ${TWINSIM_REBUILD_BACKEND:-0} == 1 || ! -x $payload/Contents/Helpers/twinsimd ]]; then
     bash scripts/package-backend.sh "$payload"
@@ -87,6 +93,12 @@ cat > "$app/Contents/Info.plist" <<PLIST
             <key>LSHandlerRank</key><string>Alternate</string>
             <key>LSItemContentTypes</key><array><string>com.apple.itunes.ipa</string></array>
         </dict>
+        <dict>
+            <key>CFBundleTypeName</key><string>Windows Program</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key><array><string>com.microsoft.windows-executable</string><string>com.microsoft.msi-installer</string></array>
+        </dict>
     </array>
     <key>UTImportedTypeDeclarations</key>
     <array>
@@ -97,6 +109,22 @@ cat > "$app/Contents/Info.plist" <<PLIST
             <key>UTTypeTagSpecification</key><dict>
                 <key>public.filename-extension</key><array><string>apk</string></array>
                 <key>public.mime-type</key><array><string>application/vnd.android.package-archive</string></array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key><string>com.microsoft.msi-installer</string>
+            <key>UTTypeDescription</key><string>Windows Installer Package</string>
+            <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+            <key>UTTypeTagSpecification</key><dict>
+                <key>public.filename-extension</key><array><string>msi</string></array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key><string>com.microsoft.windows-executable</string>
+            <key>UTTypeDescription</key><string>Windows Program</string>
+            <key>UTTypeConformsTo</key><array><string>public.data</string><string>public.executable</string></array>
+            <key>UTTypeTagSpecification</key><dict>
+                <key>public.filename-extension</key><array><string>exe</string></array>
             </dict>
         </dict>
         <dict>
@@ -116,6 +144,8 @@ plutil -lint "$app/Contents/Info.plist" >/dev/null
 echo "==> Signing"
 if [[ -n $identity ]]; then
     sign=(codesign --force --options runtime --timestamp --sign "$identity")
+elif [[ -n $local_identity ]]; then
+    sign=(codesign --force --options runtime --sign "$local_identity")
 else
     sign=(codesign --force --options runtime --sign -)
 fi
@@ -144,8 +174,10 @@ if [[ -n $identity ]]; then
     else
         echo "Signed with Developer ID; set TWINSIM_NOTARY_PROFILE to notarize." >&2
     fi
+elif [[ -n $local_identity ]]; then
+    echo "Signed with the local identity \"$local_identity\": privacy approvals persist across rebuilds on this Mac. Not notarized." >&2
 else
-    echo "Signed ad hoc for local use (no Developer ID identity). Gatekeeper will not accept it on other Macs." >&2
+    echo "Signed ad hoc (no Developer ID or local identity). Each build is a new identity for macOS privacy prompts; run scripts/create-local-signing-identity.sh to avoid that. Gatekeeper will not accept it on other Macs." >&2
 fi
 
 codesign -dv "$app" 2>&1 | grep -E 'Identifier|Signature|Runtime|flags' || true

@@ -62,6 +62,7 @@ struct Instance: Decodable, Identifiable, Sendable, Hashable {
     var isAndroid: Bool { engineId == "android-emulator" }
     var isSimulator: Bool { engineId == "ios-simulator" }
     var isVPhone: Bool { engineId == "ios-vphone" }
+    var isWindows: Bool { engineId == "windows-wine" }
     var isReady: Bool { state == "ready" }
     var isTransitioning: Bool { ["creating", "starting", "stopping"].contains(state) }
     var isAppWorkspace: Bool { purpose == "app" }
@@ -84,9 +85,12 @@ struct Artifact: Decodable, Identifiable, Sendable, Hashable {
         switch kind {
         case "apk": "android-emulator"
         case "ipa": "ios-vphone"
+        case "windowsExe", "windowsMsi": "windows-wine"
         default: "ios-simulator"
         }
     }
+
+    var isWindows: Bool { kind == "windowsExe" || kind == "windowsMsi" }
 }
 
 struct BackendOperation: Decodable, Identifiable, Sendable, Hashable {

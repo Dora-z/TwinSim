@@ -116,7 +116,7 @@ final class ScreenSession {
             stopVideo()
             pollTask?.cancel(); pollTask = nil
             source = .none
-            status = instance.map { "设备\(Labels.state($0.state))" } ?? "设备不存在"
+            status = instance.map { "设备\(Labels.state($0.state))" } ?? "设备已删除"
             return
         }
         if source == .none { chooseSource() }
@@ -368,6 +368,9 @@ final class ScreenSession {
     }
 
     func typeText(_ text: String) {
+        if instance?.isWindows == true, instance?.can("input") == true, !text.isEmpty {
+            enqueue("text", ["value": text]); return
+        }
         guard instance?.can("guestShell") == true, instance?.isAndroid == true, !text.isEmpty else { return }
         // `input text` treats %s as space; other shell metacharacters are passed as one argv element.
         let encoded = text.replacingOccurrences(of: "%", with: "\\%").replacingOccurrences(of: " ", with: "%s")

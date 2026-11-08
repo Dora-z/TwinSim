@@ -151,6 +151,7 @@ final class Agent {
         case "android-emulator": "android"
         case "ios-simulator": "ios-simulator"
         case "ios-vphone": "ios-device-vm"
+        case "windows-wine": "windows"
         default: engine ?? "?"
         }
     }
@@ -173,9 +174,10 @@ final class Agent {
 
     func summarize(app a: [String: Any]) -> [String: Any] {
         let kind = a["kind"] as? String ?? ""
+        let windows = kind == "windowsExe" || kind == "windowsMsi"
         return ["id": Self.id(a), "name": a["name"] ?? "", "bundleId": a["bundleId"] ?? "",
-                "type": kind == "simulatorApp" ? "ios-simulator-app" : kind,
-                "runsOn": kind == "apk" ? "android" : kind == "ipa" ? "ios-device-vm" : "ios-simulator"]
+                "type": kind == "simulatorApp" ? "ios-simulator-app" : kind == "windowsExe" ? "windows-exe" : kind == "windowsMsi" ? "windows-msi" : kind,
+                "runsOn": kind == "apk" ? "android" : kind == "ipa" ? "ios-device-vm" : windows ? "windows" : "ios-simulator"]
     }
 
     /// Submits a 202 request and waits. Returns the operation; throws when it fails.
@@ -251,8 +253,9 @@ final class Agent {
     func shellOutput(_ deviceID: String, _ command: String, timeout: TimeInterval = 120) throws -> (String, String, String) {
         let d = try device(deviceID)
         try requireCapability(d, "guestShell")
-        let shell = (d["engineId"] as? String) == "android-emulator" ? "sh" : "/bin/sh"
-        let op = try action(Self.id(d), "shell", ["argv": [shell, "-c", command]], wait: cap(timeout))
+        let engine = d["engineId"] as? String
+        let argv = engine == "windows-wine" ? ["cmd", "/c", command] : [engine == "android-emulator" ? "sh" : "/bin/sh", "-c", command]
+        let op = try action(Self.id(d), "shell", ["argv": argv], wait: cap(timeout))
         let r = op["result"] as? [String: String] ?? [:]
         if let guest = r["guestResult"] { return (guest, "", "0") }
         return (r["stdout"] ?? "", r["stderr"] ?? "", r["exitCode"] ?? "?")
@@ -310,9 +313,10 @@ final class Agent {
                 if let r = c["reasonCode"] { v["reason"] = r }
                 return v
             }
-            return .json(["components": comps, "devices": try instances().map(summarize(device:)),
+            let hello = (try? bridge.request(["type": "hello"])) ?? [:]
+            return .json(["dataDirectory": hello["dataDirectory"] ?? "", "components": comps, "devices": try instances().map(summarize(device:)),
                           "apps": try artifacts().map(summarize(app:)),
-                          "notes": "Android: full touch/keys/UI tree/shell. iOS Simulator: screenshots and logs only. Device IPAs need the iOS research VM (vphone)."])
+                          "notes": "Android: full touch/keys/UI tree/shell. iOS Simulator: screenshots and logs only. Windows (.exe/.msi via Wine): native Mac windows; screenshot of the program window, tap/type_text/press_key (needs Accessibility permission), cmd shell, windows_tool, windows_settings. Device IPAs need the iOS research VM (vphone)."])
         })
 
         t.append(Tool(name: "list_components", description: "Engines and runtimes with install status (ready, downloadable, needsConsent, blocked, externalSetup) and reasons.", readOnly: true) { [unowned self] _ in
@@ -358,14 +362,15 @@ final class Agent {
             .json(try instances().map(summarize(device:)))
         })
 
-        t.append(Tool(name: "create_device", description: "Create a full device. Profiles: android-aosp, android-research (adb root), android-magisk, android-google-apis (API 34 Google APIs, adb root), ios-development (iOS Simulator), ios-research (vphone VM). Set start=true to boot it.",
-                      properties: ["profileId": prop("string", "Device profile.", enum: ["android-aosp", "android-research", "android-magisk", "android-google-apis", "ios-development", "ios-research"]),
+        t.append(Tool(name: "create_device", description: "Create a full device. Profiles: android-aosp, android-research (adb root), android-magisk, android-google-apis (API 34 Google APIs, adb root), ios-development (iOS Simulator), ios-research (vphone VM), windows-desktop (Wine prefix for Windows programs). Set start=true to boot it.",
+                      properties: ["profileId": prop("string", "Device profile.", enum: ["android-aosp", "android-research", "android-magisk", "android-google-apis", "ios-development", "ios-research", "windows-desktop"]),
                                    "name": prop("string", "Display name."),
                                    "start": prop("boolean", "Boot after creating (default true)."),
                                    "showWindow": prop("boolean", "Open the device window in the TwinSim UI (default false).")],
                       required: ["profileId", "name"]) { [unowned self] a in
             let profile = try a.require("profileId")
-            let engine = profile.hasPrefix("android") ? "android-emulator" : profile == "ios-development" ? "ios-simulator" : "ios-vphone"
+            let engine = profile.hasPrefix("android") ? "android-emulator" : profile == "ios-development" ? "ios-simulator"
+                : profile.hasPrefix("windows") ? "windows-wine" : "ios-vphone"
             let op = try operation("/instances", body: ["engineId": engine, "profileId": profile, "name": try a.require("name")], wait: cap(600))
             if let p = pending(op) { return p }
             let id = (op["result"] as? [String: String])?["instanceId"] ?? (op["instanceId"] as? String ?? "")
@@ -389,6 +394,16 @@ final class Agent {
             })
         }
 
+        t.append(Tool(name: "delete_device", description: "Permanently delete a device and all its data (installed apps, app data, snapshots); a running device is stopped first. vphone VMs are only unregistered. Only call this when the user asked to delete the device.",
+                      properties: ["device": deviceProp], required: ["device"], destructive: true) { [unowned self] a in
+            let d = try device(try a.require("device"))
+            let op = try action(Self.id(d), "delete", wait: cap(600))
+            let detail = (op["result"] as? [String: String])?["result"] ?? "deleted"
+            return .text(detail == "unregistered"
+                ? "Removed \(d["name"] ?? "") from TwinSim (the vphone VM files were kept)."
+                : "Deleted \(d["name"] ?? "") (\(Self.id(d))) and its data.")
+        })
+
         t.append(Tool(name: "show_device", description: "Open the device's live screen window in the TwinSim app so the user can watch.",
                       properties: ["device": deviceProp], required: ["device"]) { [unowned self] a in
             let d = try device(try a.require("device"))
@@ -400,7 +415,7 @@ final class Agent {
             .json(try artifacts().map(summarize(app:)))
         })
 
-        t.append(Tool(name: "import_app", description: "Import an app from an absolute local path: .apk (Android), .app (iOS Simulator build) or .ipa (iOS device build).",
+        t.append(Tool(name: "import_app", description: "Import an app from an absolute local path: .apk (Android), .app (iOS Simulator build), .ipa (iOS device build), or .exe/.msi (Windows, runs through Wine).",
                       properties: ["path": prop("string", "Absolute path on this Mac.")], required: ["path"]) { [unowned self] a in
             let path = (try a.require("path") as NSString).expandingTildeInPath
             let result = try bridge.http("POST", "/artifacts/import", body: ["path": path]).check()
@@ -427,6 +442,12 @@ final class Agent {
             if let ref = a.string("device") { body["instanceId"] = Self.id(try device(ref)) }
             else if let profile = a.string("profileId") { body["profileId"] = profile }
             else if kind == "apk" && !ready("android-runtime") && ready("android-google-apis") { body["profileId"] = "android-google-apis" }
+            if kind == "windowsExe" || kind == "windowsMsi", body["instanceId"] == nil,
+               let wine = comps.first(where: { $0["id"] as? String == "windows-wine" }), wine["status"] as? String != "ready" {
+                let reason = wine["reasonCode"] as? String ?? "WINE_MISSING"
+                throw AgentError(reason, "Windows programs need the windows-wine component (status: \(wine["status"] ?? "?")).",
+                                 hint: reason == "ROSETTA_MISSING" ? Hints.for(reason) : "Call install_component with componentId windows-wine (about 230 MB download).")
+            }
             if kind == "ipa", body["instanceId"] == nil, let vphone = comps.first(where: { $0["id"] as? String == "ios-vphone" }),
                vphone["status"] as? String != "ready" {
                 let reason = vphone["reasonCode"] as? String ?? "EXTERNAL_SETUP_REQUIRED"
@@ -435,10 +456,14 @@ final class Agent {
             let op = try operation("/artifacts/\(Self.id(artifact))/launch", body: body, wait: wait(a, 600))
             if let p = pending(op) { return p }
             let instance = (op["result"] as? [String: String])?["instanceId"] ?? (op["instanceId"] as? String ?? "")
-            if a.bool("showWindow") ?? true { try? bridge.showWindow(instanceId: instance, artifactId: Self.id(artifact)) }
+            let isWindows = kind == "windowsExe" || kind == "windowsMsi"
+            // Windows programs show their own native Mac window; others get a TwinSim window.
+            if a.bool("showWindow") ?? true, !isWindows { try? bridge.showWindow(instanceId: instance, artifactId: Self.id(artifact)) }
             var out = summarize(device: try device(instance))
             out["app"] = summarize(app: artifact)
-            out["next"] = "Use screenshot (and ui_tree on Android) with device=\(instance)."
+            out["next"] = isWindows
+                ? "The program opens in its own window on the Mac (it may take a few seconds). Use screenshot / tap / type_text / press_key with device=\(instance)."
+                : "Use screenshot (and ui_tree on Android) with device=\(instance)."
             return .json(out)
         })
 
@@ -559,8 +584,13 @@ final class Agent {
         t.append(Tool(name: "type_text", description: "Android: type text into the focused field (tap the field first). Use press_key enter to submit.",
                       properties: ["device": deviceProp, "text": prop("string", "Text to type.")], required: ["device", "text"]) { [unowned self] a in
             let d = try device(try a.require("device"))
-            guard (d["engineId"] as? String) == "android-emulator" else { throw AgentError("CAPABILITY_UNSUPPORTED", "type_text is available for Android devices.") }
             let text = try a.require("text")
+            if (d["engineId"] as? String) == "windows-wine" {
+                try requireCapability(d, "input")
+                _ = try action(Self.id(d), "text", ["value": text], wait: cap(60))
+                return .text("Typed \(text.count) characters.")
+            }
+            guard (d["engineId"] as? String) == "android-emulator" else { throw AgentError("CAPABILITY_UNSUPPORTED", "type_text is available for Android and Windows devices.") }
             // `input text` cannot take spaces directly (%s) and needs shell quoting.
             let encoded = text.replacingOccurrences(of: "%", with: "\\%").replacingOccurrences(of: " ", with: "%s")
             let quoted = "'" + encoded.replacingOccurrences(of: "'", with: "'\\''") + "'"
@@ -574,7 +604,10 @@ final class Agent {
             let d = try device(try a.require("device"))
             try requireCapability(d, "input")
             let key = try a.require("key")
-            let value = (d["engineId"] as? String) == "android-emulator" ? (Self.keyAliases[key.lowercased()] ?? key.uppercased()) : key.lowercased()
+            let engine = d["engineId"] as? String
+            let value = engine == "android-emulator" ? (Self.keyAliases[key.lowercased()] ?? key.uppercased())
+                : engine == "windows-wine" ? (["back": "escape", "delete": "backspace"][key.lowercased()] ?? key.lowercased())
+                : key.lowercased()
             _ = try action(Self.id(d), "key", ["value": value], wait: cap(60))
             return .text("Pressed \(value).")
         })
@@ -693,6 +726,27 @@ final class Agent {
             guard let port = a.int("localPort") else { throw AgentError("INVALID_ARGUMENT", "localPort is required.") }
             _ = try action(Self.id(d), "unforward", ["localPort": port], wait: cap(60))
             return .text("Removed 127.0.0.1:\(port).")
+        })
+
+        t.append(Tool(name: "windows_tool", description: "Windows (Wine) devices: open a built-in Windows utility in its own window: winecfg, explorer, regedit, taskmgr, cmd, control, uninstaller or notepad.",
+                      properties: ["device": deviceProp, "tool": prop("string", "Utility name.", enum: ["winecfg", "explorer", "regedit", "taskmgr", "cmd", "control", "uninstaller", "notepad"])],
+                      required: ["device", "tool"]) { [unowned self] a in
+            let d = try device(try a.require("device"))
+            try requireCapability(d, "windowsTools")
+            _ = try action(Self.id(d), "wine-tool", ["value": try a.require("tool")], wait: cap(60))
+            return .text("Opened \(try a.require("tool")).")
+        })
+
+        t.append(Tool(name: "windows_settings", description: "Windows (Wine) devices: performance and display settings. dxvk=true uses DXVK (Direct3D 10/11 via Vulkan/Metal, needs the windows-dxvk component); display retina (sharp, 192 DPI) or standard (96 DPI, for programs that scale badly). Applies to programs started afterwards.",
+                      properties: ["device": deviceProp, "dxvk": prop("boolean", "Enable DXVK."),
+                                   "display": prop("string", "Display mode.", enum: ["retina", "standard"])],
+                      required: ["device"]) { [unowned self] a in
+            let d = try device(try a.require("device"))
+            guard (d["engineId"] as? String) == "windows-wine" else { throw AgentError("CAPABILITY_UNSUPPORTED", "windows_settings is for Windows devices.") }
+            var done: [String] = []
+            if let on = a.bool("dxvk") { _ = try action(Self.id(d), "dxvk", ["value": on ? "on" : "off"], wait: cap(60)); done.append("DXVK \(on ? "on" : "off")") }
+            if let display = a.string("display") { _ = try action(Self.id(d), "display", ["value": display], wait: cap(120)); done.append("display \(display)") }
+            return .text(done.isEmpty ? "Nothing changed (pass dxvk and/or display)." : "Applied: " + done.joined(separator: ", ") + ". Restart running programs to apply.")
         })
 
         t.append(Tool(name: "wait_operation", description: "Wait for a long-running operation returned as still running.",

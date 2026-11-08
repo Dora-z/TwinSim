@@ -6,6 +6,9 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [.executable(name: "twinsimd", targets: ["TwinSim"])],
     dependencies: [.package(url: "https://github.com/vapor/vapor.git", exact: "4.122.3")],
-    targets: [.executableTarget(name: "TwinSim", dependencies: [.product(name: "Vapor", package: "vapor")])],
+    targets: [
+        .executableTarget(name: "TwinSim", dependencies: [.product(name: "Vapor", package: "vapor")]),
+        .testTarget(name: "TwinSimTests", dependencies: ["TwinSim"]),
+    ],
     swiftLanguageModes: [.v5]
 )

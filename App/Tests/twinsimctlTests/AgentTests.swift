@@ -30,11 +30,14 @@ final class AgentTests: XCTestCase {
         XCTAssertEqual(agent.match(nodes, text: nil, resourceId: "login", desc: nil).count, 1)
     }
 
-    func testSocketPathFallsBackWhenTooLong() {
-        let long = "/" + String(repeating: "x", count: 120)
-        let path = AgentProtocol.socketPath(environment: ["TWINSIM_HOME": long])
-        XCTAssertLessThan(path.utf8.count, 104)
-        XCTAssertEqual(AgentProtocol.socketPath(environment: ["TWINSIM_HOME": "/tmp/a"]), "/tmp/a/agent.sock")
+    func testSocketPathIsShortAndKeyedByDataDirectory() {
+        let long = "/Volumes/" + String(repeating: "x", count: 120)
+        let a = AgentProtocol.socketPath(environment: ["TWINSIM_HOME": long])
+        XCTAssertLessThan(a.utf8.count, 104)
+        XCTAssertNotEqual(a, AgentProtocol.socketPath(environment: ["TWINSIM_HOME": "/tmp/a"]))
+        XCTAssertEqual(AgentProtocol.socketPath(environment: ["TWINSIM_HOME": "/tmp/a/"]),
+                       AgentProtocol.socketPath(environment: ["TWINSIM_HOME": "/tmp/a"]))
+        XCTAssertEqual(AgentProtocol.dataDirectory(environment: ["TWINSIM_HOME": "/tmp/a"]), "/tmp/a")
     }
 
     func testToolSchemasAreValid() {

@@ -19,7 +19,9 @@ struct Importer: Sendable {
         case "apk": kind = .apk
         case "ipa": kind = .ipa
         case "app": kind = .simulatorApp
-        default: throw BackendError("UNSUPPORTED_ARTIFACT", "Select an APK, an IPA, or an iOS Simulator .app bundle.")
+        case "exe": kind = .windowsExe
+        case "msi": kind = .windowsMsi
+        default: throw BackendError("UNSUPPORTED_ARTIFACT", "Select an APK, an IPA, an iOS Simulator .app bundle, or a Windows .exe/.msi.")
         }
         let source = source.resolvingSymlinksInPath()
         let id = UUID()
@@ -61,6 +63,28 @@ struct Importer: Sendable {
                 try MachO.check(data, simulator: false)
                 bundle = properties.bundle
                 digest = try Files.sha256(saved)
+            case .windowsExe, .windowsMsi:
+                let handle = try FileHandle(forReadingFrom: saved)
+                let header = try handle.read(upToCount: 1 << 20) ?? Data()
+                try? handle.close()
+                if kind == .windowsMsi {
+                    guard PortableExecutable.isMSI(header) else {
+                        throw BackendError("INVALID_MSI", "The file is not a Windows Installer package.")
+                    }
+                } else {
+                    switch try PortableExecutable.machine(header) {
+                    case .x86, .x64: break
+                    case .arm64:
+                        throw BackendError("APP_ARCH_UNSUPPORTED", "ARM64 Windows programs cannot run in Wine on macOS; use the x86 or x64 build.")
+                    case .other(let machine):
+                        throw BackendError("APP_ARCH_UNSUPPORTED", String(format: "Unsupported Windows machine type 0x%04x.", machine))
+                    }
+                }
+                digest = try Files.sha256(saved)
+                let stem = URL(fileURLWithPath: filename).deletingPathExtension().lastPathComponent.lowercased()
+                    .map { $0.isASCII && ($0.isLetter || $0.isNumber) ? String($0) : "-" }.joined()
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+                bundle = "win." + (stem.isEmpty ? "app" : String(stem.prefix(60))) + "." + digest.prefix(8)
             case .simulatorApp:
                 digest = try Self.bundleHash(saved)
                 let manifest = saved.appendingPathComponent("Info.plist")

@@ -4,6 +4,7 @@ struct DevicesView: View {
     @Environment(AppStore.self) private var store
     @State private var selection: UUID?
     @State private var creating = false
+    @State private var deleting: Instance?
 
     private var devices: [Instance] { store.instances.filter { !$0.isAppWorkspace } }
     private var workspaces: [Instance] { store.instances.filter(\.isAppWorkspace) }
@@ -22,16 +23,17 @@ struct DevicesView: View {
                 }
                 if !devices.isEmpty {
                     Section("设备") {
-                        ForEach(devices) { DeviceRow(instance: $0).tag($0.id) }
+                        ForEach(devices) { DeviceRow(instance: $0, onDelete: { deleting = $0 }).tag($0.id) }
                     }
                 }
                 if !workspaces.isEmpty {
                     Section("应用工作区（后台）") {
-                        ForEach(workspaces) { DeviceRow(instance: $0).tag($0.id) }
+                        ForEach(workspaces) { DeviceRow(instance: $0, onDelete: { deleting = $0 }).tag($0.id) }
                     }
                 }
             }
             .frame(minWidth: 260, idealWidth: 300, maxWidth: 380)
+            .onDeleteCommand { if let id = selection { deleting = store.instance(id) } }
             Group {
                 if let id = selection, store.instance(id) != nil {
                     DeviceDetailView(instanceId: id).id(id)
@@ -50,6 +52,10 @@ struct DevicesView: View {
                 Button { Task { await store.reloadInstances() } } label: { Label("刷新", systemImage: "arrow.clockwise") }
             }
         }
+        .deleteDeviceConfirmation($deleting)
+        .onChange(of: store.instances.map(\.id)) { _, ids in
+            if let id = selection, !ids.contains(id) { selection = ids.first }
+        }
         .sheet(isPresented: $creating) {
             CreateDeviceSheet { id in selection = id }
         }
@@ -60,10 +66,11 @@ struct DevicesView: View {
 struct DeviceRow: View {
     @Environment(AppStore.self) private var store
     let instance: Instance
+    var onDelete: (Instance) -> Void = { _ in }
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: instance.isAndroid ? "smartphone" : "iphone")
+            Image(systemName: instance.isWindows ? "pc" : instance.isAndroid ? "smartphone" : "iphone")
                 .font(.title2).foregroundStyle(instance.isReady ? Color.accentColor : .secondary)
                 .frame(width: 26)
             VStack(alignment: .leading, spacing: 2) {
@@ -77,7 +84,7 @@ struct DeviceRow: View {
             StatusBadge.instance(instance.state)
         }
         .padding(.vertical, 3)
-        .contextMenu { DeviceActions(instance: instance) }
+        .contextMenu { DeviceActions(instance: instance, onDelete: onDelete) }
     }
 }
 
@@ -86,6 +93,7 @@ struct DeviceActions: View {
     @Environment(AppStore.self) private var store
     @Environment(\.openWindow) private var openWindow
     let instance: Instance
+    var onDelete: (Instance) -> Void = { _ in }
 
     var body: some View {
         Button("启动") { Task { await store.run(instance.id, "start") } }
@@ -95,6 +103,9 @@ struct DeviceActions: View {
         Divider()
         Button("查看画面") { openWindow(value: ScreenTarget(instanceId: instance.id)) }
             .disabled(!instance.isReady)
+        Divider()
+        Button("删除设备…", role: .destructive) { onDelete(instance) }
+            .disabled(instance.isTransitioning)
     }
 }
 
@@ -103,6 +114,7 @@ struct DeviceDetailView: View {
     @Environment(\.openWindow) private var openWindow
     let instanceId: UUID
     @State private var installTarget: UUID?
+    @State private var deleting: Instance?
 
     var body: some View {
         if let instance = store.instance(instanceId) {
@@ -128,6 +140,7 @@ struct DeviceDetailView: View {
                 }
                 .padding(20)
             }
+            .deleteDeviceConfirmation($deleting)
         }
     }
 
@@ -163,6 +176,12 @@ struct DeviceDetailView: View {
                     Button { Task { await store.run(instance.id, "stop") } } label: { Label("停机", systemImage: "stop.fill") }
                 }
             }
+            Menu {
+                Button("删除设备…", role: .destructive) { deleting = instance }
+                    .disabled(instance.isTransitioning)
+            } label: { Image(systemName: "ellipsis.circle") }
+            .menuStyle(.borderlessButton).fixedSize()
+            .help("更多操作")
         }
     }
 
@@ -270,7 +289,7 @@ struct CreateDeviceSheet: View {
     private var missing: [Component] {
         guard let engine else { return [] }
         let needed = engine.componentIds.filter { id in
-            id != "android-display" && (id == "android-engine" || id == "ios-vphone" || id == "ios-simulator-runtime" ||
+            id != "android-display" && id != "windows-dxvk" && (id == "android-engine" || id == "ios-vphone" || id == "ios-simulator-runtime" || id == "windows-wine" ||
                                         id == (profileId == "android-google-apis" ? "android-google-apis" : "android-runtime"))
         }
         return needed.compactMap { store.component($0) }.filter { !$0.isReady }

@@ -10,6 +10,7 @@ final class MCPServer {
     TwinSim runs Android emulators and iOS Simulators on this Mac and lets you drive them.
     Typical flow: status → open_app (path or imported app; returns a device ID) → screenshot / ui_tree → tap_element or tap / swipe / type_text / press_key → screenshot again to verify → logs when debugging → stop_device when done.
     Coordinates: tap/swipe use the pixel space of the latest screenshot image (ui_tree reports the same space). Prefer ui_tree + tap_element on Android over pixel guessing.
+    Windows programs (.exe/.msi) run through Wine as native Mac windows: screenshot captures the program window; tap/type_text/press_key need the Accessibility permission; shell runs cmd /c; windows_tool opens winecfg/regedit/etc.
     iOS Simulator devices are screenshot + logs only (no input). Device IPAs need the iOS research VM, which usually requires manual host setup — report blockers to the user instead of retrying.
     Never accept SDK licenses (install_component acceptLicenses=true) without the user's explicit consent. Long operations (first boot, image downloads) can take minutes; if a tool reports an operation still running, call wait_operation.
     """

@@ -1,6 +1,6 @@
 # 让 AI 使用 TwinSim
 
-TwinSim 为 AI 提供四种接入方式，底层是同一组工具（共 31 个）。
+TwinSim 为 AI 提供四种接入方式，底层是同一组工具（共 34 个）。
 
 | 方式 | 适用 | 入口 |
 | --- | --- | --- |
@@ -21,11 +21,11 @@ TwinSim 为 AI 提供四种接入方式，底层是同一组工具（共 31 个�
 AI 客户端 ──stdio/MCP 或命令行──▶ twinsim ──Unix 套接字（仅当前用户）──▶ TwinSim.app ──HTTP + 令牌──▶ twinsimd
 ```
 
-- `twinsim` 不保存后端令牌。它连接正在运行的 TwinSim.app 的本机套接字 `<数据目录>/agent.sock`（权限 0600，应用会校验对端 UID），由应用转发请求时附上令牌。
+- `twinsim` 不保存后端令牌。它连接正在运行的 TwinSim.app 的本机套接字（位于当前用户的临时目录 `$TMPDIR/twinsim-<数据目录哈希>.sock`，权限 0600，应用会校验对端 UID），由应用转发请求时附上令牌。
 - TwinSim 未运行时，`twinsim` 会通过 `open -g -j` 在后台启动它，并等待后端就绪。经 LaunchServices 启动能保证 iOS Simulator 可以启动。
 - AI 发起的操作与界面操作是同一批后端操作，会出现在 TwinSim 的「活动」和设备状态中。`open_app` 和 `show_device` 会打开画面窗口，用户可以看到 AI 在做什么。
 - 关闭「设置 > AI 集成 > 允许 AI 工具连接 TwinSim」即可禁止所有 AI 连接。
-- 设置了 `TWINSIM_HOME` 时，`twinsim` 会连接对应数据目录的实例，与应用使用同一规则。
+- `twinsim` 用与应用相同的规则确定数据目录：先看 `TWINSIM_HOME`，再看应用设置中选择的位置（例如外置硬盘），最后是默认位置。数据移到外置硬盘后，MCP 配置无需修改。
 
 ## 配置 MCP 客户端
 
@@ -65,10 +65,11 @@ MCP 服务器在 `initialize` 中返回使用说明，包括推荐流程、坐�
 | --- | --- |
 | 概览 | `status`、`list_components`、`list_devices`、`list_apps` |
 | 组件 | `install_component`（需要许可时先返回原文，`acceptLicenses=true` 只能在用户明确同意后使用） |
-| 设备 | `create_device`、`start_device`、`stop_device`、`show_device` |
+| 设备 | `create_device`、`start_device`、`stop_device`、`delete_device`（永久删除，标注为 destructive）、`show_device` |
 | 应用 | `import_app`、`open_app`（可直接传文件路径，复用后台实例和已有安装）、`launch_app`、`uninstall_app` |
 | 观察 | `screenshot`、`ui_tree`（Android 控件树：文本、resource-id、content-desc、可点击、中心点）、`wait_for_text`、`logs` |
 | 操作 | `tap`、`tap_element`（按文本、ID 或描述点击）、`swipe`、`type_text`、`press_key` |
+| Windows | `windows_tool`（winecfg、regedit、taskmgr、cmd 等）、`windows_settings`（DXVK、Retina/标准显示） |
 | 研究 | `shell`、`verify_root`、`set_writable_system`、`snapshot`、`push_file`、`pull_file`、`port_forward`、`remove_port_forward` |
 | 长操作 | `wait_operation` |
 
@@ -82,6 +83,7 @@ MCP 服务器在 `initialize` 中返回使用说明，包括推荐流程、坐�
 
 - Android：全部工具可用。`android-research` 和 `android-google-apis` 配置提供 adb root、系统可写和快照。
 - iOS Simulator：截图、日志、打开和停止应用。后端不支持输入，`tap` 等工具会返回 `CAPABILITY_UNSUPPORTED`。
+- Windows（.exe/.msi，经 Wine）：程序以原生 Mac 窗口运行。`screenshot` 截取程序窗口，需要「录屏与系统录音」权限；`tap`、`type_text`、`press_key` 通过 CGEvent 发送，需要「辅助功能」权限；`shell` 执行 `cmd /c`；`ui_tree`、`swipe` 不适用。
 - iOS 真机 IPA：需要 vphone 研究虚拟机。宿主机未配置时，`open_app` 返回 `RESEARCH_GUESTS_DISABLED` 等原因。
 
 ## 命令行示例

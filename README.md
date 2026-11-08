@@ -1,6 +1,6 @@
 # TwinSim
 
-在 Apple Silicon Mac 上运行 Android 模拟器和 iOS Simulator：导入 APK、Simulator `.app` 或 IPA 一键打开，查看实时画面并触控，配合日志、客体 shell、root 等研究工具，并可通过 MCP 或命令行交给 AI 操作。
+在 Apple Silicon Mac 上运行 Android 模拟器、iOS Simulator 和 Windows 程序：导入 APK、Simulator `.app`、IPA 或 Windows `.exe`/`.msi` 一键打开，查看画面并操作，配合日志、客体 shell、root 等研究工具，并可通过 MCP 或命令行交给 AI 操作。设备、运行环境和应用数据可以放在外置硬盘上。Windows 程序通过 WineHQ 上游 Wine 运行，不依赖 CrossOver。
 
 ## 安装
 

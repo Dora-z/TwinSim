@@ -4,6 +4,7 @@ enum Engine: String, CaseIterable, Codable, Sendable {
     case android = "android-emulator"
     case simulator = "ios-simulator"
     case vphone = "ios-vphone"
+    case windows = "windows-wine"
 }
 
 enum Profile: String, CaseIterable, Codable, Sendable {
@@ -13,11 +14,13 @@ enum Profile: String, CaseIterable, Codable, Sendable {
     case google = "android-google-apis"
     case simulator = "ios-development"
     case vphone = "ios-research"
+    case windows = "windows-desktop"
 
     var engine: Engine {
         switch self {
         case .simulator: .simulator
         case .vphone: .vphone
+        case .windows: .windows
         default: .android
         }
     }
@@ -39,6 +42,7 @@ enum Profile: String, CaseIterable, Codable, Sendable {
         case .android: self == .google ? "android-google-apis" : "android-runtime"
         case .simulator: "ios-simulator-runtime"
         case .vphone: "ios-vphone"
+        case .windows: "windows-wine"
         }
     }
 }
@@ -95,12 +99,13 @@ struct InstanceView: Encodable {
 
 struct Artifact: Codable, Sendable {
     enum Kind: String, Codable, Sendable {
-        case apk, ipa, simulatorApp
+        case apk, ipa, simulatorApp, windowsExe, windowsMsi
         var engine: Engine {
             switch self {
             case .apk: .android
             case .ipa: .vphone
             case .simulatorApp: .simulator
+            case .windowsExe, .windowsMsi: .windows
             }
         }
     }

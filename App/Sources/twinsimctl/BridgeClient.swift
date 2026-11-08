@@ -226,6 +226,12 @@ enum Hints {
         case "CAPABILITY_UNSUPPORTED": return "This device's engine does not support that action; check the device capabilities."
         case "OUTPUT_LIMIT", "TOOL_TIMEOUT": return "The guest produced too much output or was slow; retry, or narrow the request."
         case "APP_HAS_NO_LAUNCHER": return "The APK has no launcher activity; use shell with `am start -n` instead."
+        case "ROSETTA_MISSING": return "Windows programs need Rosetta 2. Ask the user to run `softwareupdate --install-rosetta`."
+        case "WINE_MISSING": return "Install the windows-wine component (install_component componentId=windows-wine)."
+        case "NO_WINDOW": return "The Windows program has no window on screen yet; wait a few seconds or open it with open_app / windows_tool."
+        case "SCREEN_RECORDING_REQUIRED": return "Ask the user to allow TwinSim in System Settings > Privacy & Security > Screen & System Audio Recording."
+        case "ACCESSIBILITY_REQUIRED": return "Ask the user to allow TwinSim in System Settings > Privacy & Security > Accessibility so it can send clicks and keys."
+        case "APP_ARCH_UNSUPPORTED": return "Use the x86/x64 build of the Windows program; ARM64 Windows builds cannot run in Wine on macOS."
         default: return nil
         }
     }

@@ -92,3 +92,28 @@
 另一轮紧接重新打包之后运行时，后台启动失败：`open` 没有启动应用，套接字也没有出现，原因未确认。之后命令行改为检查 `open` 的退出状态并重试启动，再次紧接打包运行时通过。改动后用 `TWINSIM_SELF_TEST_PLATFORMS=android,ipa` 回归 GUI 自测，25/25 通过，并确认应用内的 AI 连接正在监听（[设置页截图](images/frontend/12-ai-settings.png)）。
 
 未在真实客户端中验证：未在 Claude Code、Claude Desktop、Cursor、VS Code、Codex、Gemini CLI 中实际加载配置，本机未安装这些 CLI。协议层面已由上面的 MCP 客户端测试覆盖。
+
+## Windows（Wine）
+
+0.3.0 已加入 Windows 程序支持，通过编译、后端单元测试（PE 识别、进程环境读取、`C:\` 路径映射）和不运行 Wine 的回归测试，组件页正确显示 `windows-wine` 与 `windows-dxvk`。**尚未实际运行 Wine**：下载的 Wine 二进制需要用户自行执行实测。实测命令：
+
+```bash
+TWINSIM_APP=/Applications/TwinSim.app TWINSIM_SELF_TEST_PLATFORMS=windows bash scripts/frontend-e2e.sh
+```
+
+测试使用 Wine 自带的 32 位扫雷和 64 位记事本，覆盖打开程序、窗口截图、`cmd`、文件传输、在记事本中输入、DXVK、显示模式、停机和删除。
+
+## 数据位置与删除设备
+
+`bash scripts/data-e2e.sh`：从内置磁盘的数据目录（`~/TwinSimMoveTest/TwinSim`）开始，其中有一台 Android AVD（含快速启动状态）和一台 iOS Simulator 设备，共 6.62 GB。该位置通过应用设置指定，不使用 `TWINSIM_HOME`。测试由应用内自测执行，结果 **22/22 通过**。
+
+| 项目 | 结果 | 说明 |
+| --- | --- | --- |
+| 移动到外置 APFS 硬盘 | 通过 | 86 秒。Android 设备运行中，先停机。进度到 100%，后端从新位置启动 |
+| 原位置删除、设备保留 | 通过 | 两台设备 ID 不变 |
+| AVD 路径改写 | 通过 | `.ini` 中的 `path=` 指向新位置 |
+| 从新位置启动 | 通过 | Android 7 秒（快速启动），iOS 20 秒，截图正常 |
+| `twinsim` 找到新位置 | 通过 | 未设置 `TWINSIM_HOME`，按应用设置连接 |
+| 外置硬盘未连接 | 通过 | 不启动后端，也不在 `/Volumes` 下创建目录。恢复后重新连接 |
+| 删除运行中的 Android 设备 | 通过 | 25 秒。先停机，AVD 目录和 `.ini` 被删除 |
+| 删除运行中的 iOS Simulator 设备 | 通过 | 4 秒。设备集中的目录被删除，重新同步后不再出现 |
