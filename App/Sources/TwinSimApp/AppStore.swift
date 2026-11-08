@@ -212,6 +212,28 @@ final class AppStore {
         }
     }
 
+    /// Deletes an imported app from the library; optionally uninstalls it from devices first.
+    @discardableResult
+    func deleteArtifact(_ artifact: Artifact, uninstall: Bool) async -> Bool {
+        do {
+            let accepted = try await submit { client, key in try await client.deleteArtifact(artifact.id, uninstall: uninstall, key: key) }
+            let op = try await wait(accepted.operationId, timeout: 1200)
+            artifacts.removeAll { $0.id == artifact.id }
+            await reloadInstances()
+            if let skipped = op.result?["notUninstalled"] {
+                post(UserNotice(title: "已删除 \(artifact.name)",
+                                message: "以下设备未运行，未能卸载（应用数据仍在设备中，可启动后在设备页卸载）：\(skipped)"))
+            }
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            notify("删除 \(artifact.name) 失败", error)
+            await reloadArtifacts()
+            return false
+        }
+    }
+
     // MARK: Data directory
 
     /// Uses `destination` as the data directory without copying (empty folder, or one that
@@ -413,6 +435,11 @@ final class AppStore {
         case "operation":
             guard let op = try? JSONDecoder().decode(BackendOperation.self, from: Data(event.data.utf8)) else { return }
             record(op)
+        case "artifact-deleted":
+            if let object = try? JSONSerialization.jsonObject(with: Data(event.data.utf8)) as? [String: Any],
+               let id = (object["id"] as? String).flatMap(UUID.init(uuidString:)) {
+                artifacts.removeAll { $0.id == id }
+            }
         case "instance-deleted":
             if let object = try? JSONSerialization.jsonObject(with: Data(event.data.utf8)) as? [String: Any],
                let id = (object["id"] as? String).flatMap(UUID.init(uuidString:)) {

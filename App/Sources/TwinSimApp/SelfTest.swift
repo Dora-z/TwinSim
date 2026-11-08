@@ -78,6 +78,7 @@ final class SelfTest {
         if platforms.contains("device") { await devices() }
         if platforms.contains("data") { await dataMove() }
         if platforms.contains("windows") { await windowsPlatform() }
+        if platforms.contains("library") { await library() }
         await snapshotMain("09-devices", select: .devices)
         renderOffscreen(AISettingsView().environment(store), size: CGSize(width: 640, height: 1000), "12-ai-settings")
         check("agent bridge listening", store.agentBridge?.isListening == true, store.agentBridge?.path ?? "")
@@ -257,6 +258,59 @@ final class SelfTest {
             check("iOS stop", false, error.localizedDescription)
         }
         closeWindows()
+    }
+
+    // MARK: App library deletion + D3DMetal consent
+
+    private func library() async {
+        log("== App library ==")
+        // D3DMetal: Apple's license is fetched, read from the PDF and must be accepted first.
+        if let c = store.component("windows-d3dmetal") {
+            let text = c.licenses?.first?.text ?? ""
+            check("D3DMetal component asks for Apple license consent", c.status == "needsConsent" && text.count > 5000,
+                  "\(c.status), license \(text.count) chars, id \(c.licenses?.first?.id ?? "-")")
+        } else {
+            check("D3DMetal component listed", false)
+        }
+        // A header-only Windows executable (never executed) to exercise import + delete of .exe.
+        let exe = out.appendingPathComponent("library-sample.exe")
+        var pe = Data(count: 0x200)
+        pe[0] = 0x4d; pe[1] = 0x5a; pe[0x3c] = 0x80; pe[0x80] = 0x50; pe[0x81] = 0x45; pe[0x84] = 0x4c; pe[0x85] = 0x01
+        try? pe.write(to: exe)
+        let imported = await store.importFiles([samples.appendingPathComponent("TouchProbe.apk"),
+                                                samples.appendingPathComponent("TouchProbe.app"), exe])
+        guard imported.count == 3, let apk = imported.first(where: { $0.kind == "apk" }),
+              let sim = imported.first(where: { $0.kind == "simulatorApp" }), let win = imported.first(where: { $0.isWindows }) else {
+            check("import apk + .app + .exe", false, store.notices.last?.message ?? ""); return
+        }
+        check("import apk + .app + .exe", true, imported.map { "\($0.kind)" }.joined(separator: ", "))
+        let artifactsDir = URL(fileURLWithPath: store.dataDirectory).appendingPathComponent("artifacts")
+
+        await store.open(apk)
+        guard let ws = store.instances.first(where: { $0.isAndroid && $0.isAppWorkspace }), ws.isReady else {
+            check("open APK before delete", false, store.notices.last?.message ?? ""); return
+        }
+        let before = try? await store.perform(ws.id, "shell", body: ["argv": ["sh", "-c", "pm path org.twinsim.touchprobe"]], timeout: 60)
+        check("APK installed on device", (before?.result?["stdout"] ?? "").contains("package:"))
+        var t = Date()
+        let deleted = await store.deleteArtifact(apk, uninstall: true)
+        let after = try? await store.perform(ws.id, "shell", body: ["argv": ["sh", "-c", "pm path org.twinsim.touchprobe; echo done"]], timeout: 60)
+        check("delete APK + uninstall from running device", deleted && store.artifact(apk.id) == nil
+              && !(after?.result?["stdout"] ?? "package:").contains("package:"),
+              String(format: "%.1fs", Date().timeIntervalSince(t)))
+        check("stored APK copy removed", !FileManager.default.fileExists(atPath: artifactsDir.appendingPathComponent(apk.id.uuidString).path))
+
+        t = Date()
+        check("delete Simulator .app (library only)", await store.deleteArtifact(sim, uninstall: false) && store.artifact(sim.id) == nil
+              && !FileManager.default.fileExists(atPath: artifactsDir.appendingPathComponent(sim.id.uuidString).path),
+              String(format: "%.1fs", Date().timeIntervalSince(t)))
+        check("delete Windows .exe", await store.deleteArtifact(win, uninstall: true) && store.artifact(win.id) == nil
+              && !FileManager.default.fileExists(atPath: artifactsDir.appendingPathComponent(win.id.uuidString).path))
+        await store.reloadArtifacts()
+        check("library empty after deletes (server state)", store.artifacts.isEmpty, "\(store.artifacts.count) left")
+        let again = await store.importFiles([samples.appendingPathComponent("TouchProbe.apk")])
+        check("re-import after delete", again.first?.kind == "apk" && again.first?.id != apk.id)
+        _ = try? await store.perform(ws.id, "stop", timeout: 180)
     }
 
     // MARK: Windows (Wine)

@@ -15,12 +15,13 @@ enum Profile: String, CaseIterable, Codable, Sendable {
     case simulator = "ios-development"
     case vphone = "ios-research"
     case windows = "windows-desktop"
+    case d3dmetal = "windows-d3dmetal"
 
     var engine: Engine {
         switch self {
         case .simulator: .simulator
         case .vphone: .vphone
-        case .windows: .windows
+        case .windows, .d3dmetal: .windows
         default: .android
         }
     }
@@ -42,7 +43,7 @@ enum Profile: String, CaseIterable, Codable, Sendable {
         case .android: self == .google ? "android-google-apis" : "android-runtime"
         case .simulator: "ios-simulator-runtime"
         case .vphone: "ios-vphone"
-        case .windows: "windows-wine"
+        case .windows: self == .d3dmetal ? "windows-d3dmetal" : "windows-wine"
         }
     }
 }
@@ -189,4 +190,9 @@ struct ActionRequest: Decodable {
 struct LaunchRequest: Decodable {
     var instanceId: UUID?
     var profileId: Profile?
+}
+
+struct DeleteArtifactRequest: Decodable {
+    /// Also uninstall the app from devices it was installed on (default true).
+    var uninstall: Bool?
 }

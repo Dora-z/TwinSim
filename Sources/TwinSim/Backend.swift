@@ -119,6 +119,23 @@ actor Backend {
             result.append(Component(id: "windows-wine", status: windows.installed ? "ready" : "downloadable", version: "Wine \(Wine.version) (staging)",
                                     source: Wine.source, downloadBytes: Wine.downloadSize, requiredFreeBytes: 1_200_000_000))
         }
+        if !Wine.rosettaAvailable {
+            result.append(Component(id: "windows-d3dmetal", status: "externalSetup", version: Wine.gptkVersion, source: Wine.setupURL,
+                                    reasonCode: "ROSETTA_MISSING"))
+        } else if windows.installed(.gptk) {
+            result.append(Component(id: "windows-d3dmetal", status: "ready", version: "Game Porting Toolkit \(Wine.gptkVersion)",
+                                    source: Wine.gptkSource))
+        } else {
+            do {
+                let license = try await windows.gptkLicense()
+                result.append(Component(id: "windows-d3dmetal", status: "needsConsent", version: "Game Porting Toolkit \(Wine.gptkVersion)",
+                                        source: Wine.gptkSource, downloadBytes: Wine.gptkSize, requiredFreeBytes: 1_500_000_000,
+                                        licenses: [license]))
+            } catch {
+                result.append(Component(id: "windows-d3dmetal", status: "blocked", source: Wine.gptkLicenseURL,
+                                        reasonCode: BackendError.wrap(error).code))
+            }
+        }
         result.append(Component(id: "windows-dxvk", status: !windows.installed ? "blocked" : (windows.dxvkInstalled ? "ready" : "downloadable"),
                                 version: Wine.dxvkVersion, source: Wine.dxvkSource, downloadBytes: Wine.dxvkSize,
                                 reasonCode: windows.installed ? nil : "WINE_MISSING"))
@@ -128,7 +145,7 @@ actor Backend {
     func installComponent(_ id: String, request: InstallComponentRequest, key: String?, fingerprint: String) throws -> Operation {
         if let existing = try previous(key, fingerprint) { return existing }
         guard ["android-engine", "android-display", "android-runtime", "android-google-apis", "ios-simulator-runtime",
-               "windows-wine", "windows-dxvk"].contains(id) else {
+               "windows-wine", "windows-dxvk", "windows-d3dmetal"].contains(id) else {
             throw id == "ios-vphone"
                 ? BackendError("EXTERNAL_SETUP_REQUIRED", "Set up vphone Launchpad and the host, then refresh components.")
                 : BackendError("COMPONENT_NOT_FOUND", "No such component.")
@@ -152,6 +169,14 @@ actor Backend {
             case "windows-dxvk":
                 guard backend.windows.installed else { throw BackendError("WINE_MISSING", "Install windows-wine first.") }
                 try await backend.windows.setupDXVK(update)
+            case "windows-d3dmetal":
+                guard Wine.rosettaAvailable else { throw BackendError("ROSETTA_MISSING", "Install Rosetta 2 first.") }
+                await update("checking-licenses", nil, nil)
+                let license = try await backend.windows.gptkLicense()
+                guard request.acceptLicenses?[license.id] == license.sha256 else {
+                    throw BackendError("LICENSE_CONSENT_REQUIRED", "Review and accept Apple's Game Porting Toolkit license shown by the component endpoint.")
+                }
+                try await backend.windows.setupGPTK(update)
             default:
                 await update("xcode-runtime", nil, nil)
                 try await backend.simulator.setup()
@@ -185,7 +210,9 @@ actor Backend {
             caps["guestFiles"] = online
             caps["windowsTools"] = online
             caps["input"] = ready ? (Wine.inputAllowed ? .available : .blocked("ACCESSIBILITY_REQUIRED")) : online
-            caps["dxvk"] = windows.dxvkInstalled ? online : .blocked("DXVK_MISSING")
+            let isGPTK = device.driverID.map { windows.runtime($0) == .gptk } ?? (device.profileId == .d3dmetal)
+            caps["dxvk"] = isGPTK ? .unsupported : (windows.dxvkInstalled ? online : .blocked("DXVK_MISSING"))
+            caps["d3dmetal"] = isGPTK ? online : .unsupported
             return InstanceView(device, capabilities: caps)
         }
         let writableSystem: Capability
@@ -279,6 +306,64 @@ actor Backend {
             _ = try await backend.prepare(device.id)
             return ["instanceId": device.id.uuidString]
         }
+    }
+
+    /// Deletes an imported app: optionally uninstalls it from the devices it was installed on,
+    /// then removes the stored copy and the library entry.
+    func deleteArtifact(_ id: UUID, uninstall: Bool, key: String?, fingerprint: String) throws -> Operation {
+        if let existing = try previous(key, fingerprint) { return existing }
+        let artifact = try artifact(id)
+        return try enqueue("delete-app", resource: "artifact:" + id.uuidString, key: key, fingerprint: fingerprint) { backend, _ in
+            try await backend.removeArtifact(artifact, uninstall: uninstall)
+        }
+    }
+
+    private func removeArtifact(_ artifact: Artifact, uninstall: Bool) async throws -> [String: String] {
+        var uninstalled = 0
+        var skipped: [String] = []
+        for deviceID in state.instances.keys {
+            guard let device = state.instances[deviceID], device.installed[artifact.bundleId] == artifact.id else { continue }
+            if uninstall {
+                if device.engineId == .windows, let driver = device.driverID {
+                    // Programs copied into the prefix can be removed without starting the device;
+                    // an MSI package needs its uninstaller, which needs the device running.
+                    if artifact.kind == .windowsMsi && device.state != "ready" {
+                        skipped.append(device.name)
+                    } else if (try? await uninstallWindows(driver, artifact)) != nil {
+                        uninstalled += 1
+                    } else {
+                        skipped.append(device.name)
+                    }
+                } else if device.state == "ready", !busy.contains(resource(deviceID)) {
+                    if (try? await self.uninstall(deviceID, artifact.bundleId)) != nil { uninstalled += 1; continue }
+                    skipped.append(device.name)
+                } else {
+                    skipped.append(device.name)
+                }
+            }
+            if var current = state.instances[deviceID] {
+                current.installed[artifact.bundleId] = nil
+                try put(current)
+            }
+        }
+        try? FileManager.default.removeItem(at: importer.location(artifact).deletingLastPathComponent())
+        state.artifacts[artifact.id] = nil
+        try save()
+        publish("artifact-deleted", ["id": artifact.id.uuidString])
+        var result = ["artifactId": artifact.id.uuidString, "uninstalled": String(uninstalled)]
+        if !skipped.isEmpty { result["notUninstalled"] = skipped.joined(separator: ", ") }
+        return result
+    }
+
+    private func uninstallWindows(_ driver: String, _ artifact: Artifact) async throws {
+        let directory = windows.appDirectory(driver, artifact)
+        if artifact.kind == .windowsMsi {
+            let package = directory.appendingPathComponent(artifact.filename)
+            if FileManager.default.fileExists(atPath: package.path) {
+                try await windows.wine(driver, ["msiexec", "/x", package.path, "/qb"], timeout: 900)
+            }
+        }
+        try? FileManager.default.removeItem(at: directory)
     }
 
     func launch(_ artifactID: UUID, request: LaunchRequest, key: String?, fingerprint: String) throws -> Operation {
@@ -506,7 +591,7 @@ actor Backend {
         case .vphone: _ = try await vphone.rpc(driver, "apps.uninstall", ["bundle_id": bundle, "force": true])
         case .windows:
             if let artifactID = device.installed[bundle], let artifact = state.artifacts[artifactID] {
-                try? FileManager.default.removeItem(at: windows.appDirectory(driver, artifact))
+                try await uninstallWindows(driver, artifact)
             }
         }
         device.installed[bundle] = nil
@@ -640,6 +725,7 @@ actor Backend {
             try windows.spawn(driver, args)
         case (.windows, "dxvk"):
             guard let value = request.value, ["on", "off"].contains(value) else { throw BackendError("INVALID_ACTION", "Specify on or off.") }
+            if windows.runtime(driver) == .gptk { throw BackendError("CAPABILITY_UNSUPPORTED", "D3DMetal devices render Direct3D 11/12 with D3DMetal; DXVK does not apply.") }
             if value == "on" && !windows.dxvkInstalled { throw BackendError("DXVK_MISSING", "Install the windows-dxvk component first.") }
             var settings = windows.settings(driver)
             settings.dxvk = value == "on"

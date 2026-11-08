@@ -158,6 +158,10 @@ struct APIClient: Sendable {
         return try await post("/artifacts/\(artifact.uuidString)/launch", json: body, idempotencyKey: key)
     }
 
+    func deleteArtifact(_ artifact: UUID, uninstall: Bool, key: String) async throws -> OperationAccepted {
+        try await post("/artifacts/\(artifact.uuidString)/delete", json: ["uninstall": uninstall], idempotencyKey: key)
+    }
+
     func screenshot(_ instance: UUID) async throws -> Data {
         try await raw("/instances/\(instance.uuidString)/screenshot", timeout: 60).0
     }

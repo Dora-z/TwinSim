@@ -1,9 +1,11 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import CryptoKit
 import Darwin
 import Foundation
 import ImageIO
+import PDFKit
 
 /// Windows programs on macOS through upstream Wine (WineHQ macOS builds by Gcenx), without
 /// CrossOver. A "device" is a Wine prefix. x86 and x64 programs run through Rosetta 2 (Wine's new
@@ -23,10 +25,48 @@ struct Wine: Sendable {
     static let dxvkChecksum = "810b1e5caf8ce975b784fae866a130ad23fa0ea233b0e5609cbc4a45f3ef6f00"
     static let dxvkFolder = "dxvk-macOS-async-v1.10.3-20230507-repack-builtin"
 
+    /// Apple Game Porting Toolkit 3.0 Wine (built from Apple's open-source GPTK sources) with Apple's
+    /// D3DMetal (Direct3D 11/12 -> Metal), as distributed by Gcenx. D3DMetal is licensed by Apple;
+    /// the license document is fetched, shown verbatim and must be accepted before download.
+    static let gptkVersion = "3.0-3"
+    static let gptkSource = "https://github.com/Gcenx/game-porting-toolkit/releases/download/Game-Porting-Toolkit-3.0-3/game-porting-toolkit-3.0-3.tar.xz"
+    static let gptkSize: Int64 = 239_200_808
+    static let gptkChecksum = "d377683937340f914823dbb2e1252b329cbf834ff58907d0293db8cebf0e392e"
+    static let gptkBundle = "Game Porting Toolkit.app"
+    static let gptkLicenseURL = "https://github.com/user-attachments/files/23971305/License.pdf"
+    static let gptkLicenseChecksum = "b099088947b67c1707de9b8e8f8dd5e03a4af8048451e455b9044553beeabcf8"
+    static let gptkLicenseID = "apple-game-porting-toolkit-3.0"
+
+    enum Runtime: String, Codable, Sendable { case upstream, gptk }
+
     let config: Configuration
     let scratch: URL
 
     var runtime: URL { config.root.appendingPathComponent("runtime/wine-staging-\(Self.version)") }
+    var gptkRuntime: URL { config.root.appendingPathComponent("runtime/game-porting-toolkit-\(Self.gptkVersion)") }
+    var gptkLicenseFile: URL { config.root.appendingPathComponent("runtime/licenses/game-porting-toolkit-3.0-License.pdf") }
+
+    func root(_ kind: Runtime) -> URL {
+        switch kind {
+        case .upstream: runtime.appendingPathComponent("\(Self.bundleName)/Contents/Resources/wine")
+        case .gptk: gptkRuntime.appendingPathComponent("\(Self.gptkBundle)/Contents/Resources/wine")
+        }
+    }
+
+    static func executable(_ kind: Runtime) -> String { kind == .gptk ? "wine64" : "wine" }
+
+    func bin(_ kind: Runtime) -> URL? {
+        if kind == .upstream { return bin }
+        if let override = config.environment["TWINSIM_GPTK"] {
+            let dir = URL(fileURLWithPath: override)
+            return FileManager.default.isExecutableFile(atPath: dir.appendingPathComponent("wine64").path) ? dir : nil
+        }
+        let dir = root(.gptk).appendingPathComponent("bin")
+        return FileManager.default.isExecutableFile(atPath: dir.appendingPathComponent("wine64").path) ? dir : nil
+    }
+
+    func installed(_ kind: Runtime) -> Bool { bin(kind) != nil }
+    func runtime(_ driver: String) -> Runtime { settings(driver).runtime }
     var dxvk: URL { config.root.appendingPathComponent("runtime/dxvk-macos-1.10.3/\(Self.dxvkFolder)") }
     var prefixes: URL { config.root.appendingPathComponent("wine/prefixes") }
     var logs: URL { config.root.appendingPathComponent("wine/logs") }
@@ -59,7 +99,19 @@ struct Wine: Sendable {
     func log(_ driver: String) -> URL { logs.appendingPathComponent(driver + ".log") }
     func settingsFile(_ driver: String) -> URL { prefix(driver).appendingPathComponent("twinsim.json") }
 
-    struct Settings: Codable { var dxvk = false; var retina = true }
+    struct Settings: Codable {
+        var dxvk = false
+        var retina = true
+        var runtime: Runtime = .upstream
+
+        init(runtime: Runtime = .upstream) { self.runtime = runtime }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            dxvk = try c.decodeIfPresent(Bool.self, forKey: .dxvk) ?? false
+            retina = try c.decodeIfPresent(Bool.self, forKey: .retina) ?? true
+            runtime = try c.decodeIfPresent(Runtime.self, forKey: .runtime) ?? .upstream
+        }
+    }
 
     func settings(_ driver: String) -> Settings {
         (try? JSONDecoder().decode(Settings.self, from: Data(contentsOf: settingsFile(driver)))) ?? Settings()
@@ -73,15 +125,25 @@ struct Wine: Sendable {
     /// (no fixme/trace logging), Rosetta AVX/AVX2 advertised, host menu integration off, MoltenVK
     /// recovers lost devices; DXVK (async shader compilation) when enabled for the device.
     func environment(_ driver: String) throws -> [String: String] {
-        guard let bin else { throw BackendError("WINE_MISSING", "Install the windows-wine component first.") }
+        let kind = runtime(driver)
+        guard let bin = bin(kind) else {
+            throw kind == .gptk ? BackendError("D3DMETAL_MISSING", "Install the windows-d3dmetal component first.")
+                : BackendError("WINE_MISSING", "Install the windows-wine component first.")
+        }
         var env = config.environment.filter { !$0.key.hasPrefix("DYLD_") && $0.key != "WINEPREFIX" }
         env["WINEPREFIX"] = prefix(driver).path
         env["WINEDEBUG"] = config.environment["TWINSIM_WINEDEBUG"] ?? "fixme-all"
         env["WINEDLLOVERRIDES"] = "winemenubuilder.exe=d"
         env["ROSETTA_ADVERTISE_AVX"] = "1"
         env["MVK_CONFIG_RESUME_LOST_DEVICE"] = "1"
+        env["MVK_CONFIG_LOG_LEVEL"] = config.environment["TWINSIM_MVK_LOG_LEVEL"] ?? "1"   // MoltenVK: errors only
         env["PATH"] = bin.path + ":/usr/bin:/bin:/usr/sbin:/sbin"
-        if settings(driver).dxvk, dxvkInstalled {
+        if kind == .gptk {
+            // CrossOver-based GPTK Wine: Mach-semaphore synchronisation; D3DMetal handles D3D11/12.
+            env["WINEMSYNC"] = "1"
+            env["WINEESYNC"] = "1"
+            env["MTL_HUD_ENABLED"] = config.environment["TWINSIM_METAL_HUD"] ?? "0"
+        } else if settings(driver).dxvk, dxvkInstalled {
             env["WINEDLLPATH_PREPEND"] = dxvk.path
             env["DXVK_ASYNC"] = "1"
             env["DXVK_LOG_LEVEL"] = "none"
@@ -101,6 +163,40 @@ struct Wine: Sendable {
                 throw BackendError("INVALID_ARCHIVE", "The Wine archive does not contain \(Self.bundleName).")
             }
         }
+    }
+
+    func setupGPTK(_ update: @escaping ProgressUpdate) async throws {
+        if installed(.gptk) { return }
+        try await download(Self.gptkSource, size: Self.gptkSize, checksum: Self.gptkChecksum, stage: "downloading-d3dmetal",
+                           into: gptkRuntime, update: update) { archive, stage in
+            await update("extracting-d3dmetal", nil, nil)
+            _ = try await Command("/usr/bin/tar", ["-xJf", archive.path, "-C", stage.path], timeout: 900).run(in: scratch)
+            guard FileManager.default.fileExists(atPath: stage.appendingPathComponent(Self.gptkBundle).path) else {
+                throw BackendError("INVALID_ARCHIVE", "The archive does not contain \(Self.gptkBundle).")
+            }
+        }
+    }
+
+    /// Apple's license for the Game Porting Toolkit / D3DMetal, fetched (pinned SHA-256) and shown verbatim.
+    func gptkLicense() async throws -> LicenseText {
+        if Files.size(gptkLicenseFile) == 0 || (try? Files.sha256(gptkLicenseFile)) != Self.gptkLicenseChecksum {
+            try Files.directory(gptkLicenseFile.deletingLastPathComponent())
+            let partial = gptkLicenseFile.appendingPathExtension("download")
+            _ = try await Command("/usr/bin/curl", ["--fail", "--location", "--silent", "--show-error", "--connect-timeout", "15",
+                                                   "--max-time", "60", "--output", partial.path, Self.gptkLicenseURL], timeout: 90)
+                .run(in: scratch)
+            guard try Files.sha256(partial) == Self.gptkLicenseChecksum else {
+                try? FileManager.default.removeItem(at: partial)
+                throw BackendError("LICENSE_UNAVAILABLE", "The Game Porting Toolkit license did not match its pinned checksum.", retryable: true)
+            }
+            try? FileManager.default.removeItem(at: gptkLicenseFile)
+            try FileManager.default.moveItem(at: partial, to: gptkLicenseFile)
+        }
+        guard let text = PDFDocument(url: gptkLicenseFile)?.string, !text.isEmpty else {
+            throw BackendError("LICENSE_UNAVAILABLE", "The Game Porting Toolkit license could not be read.", retryable: true)
+        }
+        let body = "Source: \(Self.gptkLicenseURL) (SHA-256 \(Self.gptkLicenseChecksum))\n\n" + text
+        return LicenseText(id: Self.gptkLicenseID, sha256: SHA256.hash(data: Data(body.utf8)).map { String(format: "%02x", $0) }.joined(), text: body)
     }
 
     func setupDXVK(_ update: @escaping ProgressUpdate) async throws {
@@ -138,13 +234,16 @@ struct Wine: Sendable {
     // MARK: Prefix lifecycle
 
     func create(_ device: Device) async throws -> String {
-        guard installed else { throw BackendError("COMPONENT_REQUIRED", "Install windows-wine first.") }
+        let kind: Runtime = device.profileId == .d3dmetal ? .gptk : .upstream
+        guard installed(kind) else {
+            throw BackendError("COMPONENT_REQUIRED", kind == .gptk ? "Install windows-d3dmetal first." : "Install windows-wine first.")
+        }
         guard Self.rosettaAvailable else { throw BackendError("ROSETTA_MISSING", "Install Rosetta 2 to run Windows programs.") }
         let driver = device.driverName
         try Files.directory(prefixes)
         try Files.directory(logs)
         try Files.directory(prefix(driver))
-        try save(Settings(), driver)
+        try save(Settings(runtime: kind), driver)
         try await wine(driver, ["wineboot", "--init"], timeout: 900)
         try await applyDisplay(driver, retina: true)
         try await server(driver, ["-w"], timeout: 120)
@@ -154,8 +253,9 @@ struct Wine: Sendable {
     /// Runs a Wine command to completion, appending its output to the device log.
     @discardableResult
     func wine(_ driver: String, _ args: [String], timeout: TimeInterval = 120, check: Bool = true) async throws -> Command.Output {
-        guard let bin else { throw BackendError("WINE_MISSING", "Install the windows-wine component first.") }
-        let output = try await Command(bin.appendingPathComponent("wine").path, args, environment: environment(driver), timeout: timeout)
+        let kind = runtime(driver)
+        guard let bin = bin(kind) else { throw BackendError("WINE_MISSING", "Install the Windows runtime for this device first.") }
+        let output = try await Command(bin.appendingPathComponent(Self.executable(kind)).path, args, environment: environment(driver), timeout: timeout)
             .run(in: scratch, check: false)
         appendLog(driver, output.text + output.stderr)
         if check && output.code != 0 {
@@ -166,7 +266,7 @@ struct Wine: Sendable {
 
     @discardableResult
     func server(_ driver: String, _ args: [String], timeout: TimeInterval = 60) async throws -> Command.Output {
-        guard let bin else { throw BackendError("WINE_MISSING", "Install the windows-wine component first.") }
+        guard let bin = bin(runtime(driver)) else { throw BackendError("WINE_MISSING", "Install the Windows runtime for this device first.") }
         return try await Command(bin.appendingPathComponent("wineserver").path, args, environment: environment(driver), timeout: timeout)
             .run(in: scratch, check: false)
     }
@@ -189,6 +289,12 @@ struct Wine: Sendable {
 
         [HKEY_CURRENT_USER\\Software\\Wine\\WineDbg]
         "ShowCrashDialog"=dword:00000000
+
+        [HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\RunServices]
+        "winemenubuilder"=-
+
+        [HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Run]
+        "winemenubuilder"=-
 
         """
         let file = prefix(driver).appendingPathComponent("twinsim-display.reg")
@@ -217,10 +323,12 @@ struct Wine: Sendable {
 
     /// PIDs of processes from the Wine runtime whose WINEPREFIX is this device's prefix.
     func processes(_ driver: String) -> [pid_t] {
-        let root = (bin?.deletingLastPathComponent().deletingLastPathComponent().path ?? runtime.path)
+        let kind = runtime(driver)
+        let root = bin(kind)?.deletingLastPathComponent().path ?? self.root(kind).path
+        let base = kind == .gptk ? gptkRuntime.path : runtime.path
         let wanted = prefix(driver).standardizedFileURL.path
         return ProcessTable.pids().filter { pid in
-            guard let path = ProcessTable.path(pid), path.hasPrefix(root) || path.hasPrefix(runtime.path) else { return false }
+            guard let path = ProcessTable.path(pid), path.hasPrefix(root) || path.hasPrefix(base) else { return false }
             return ProcessTable.environment(pid)["WINEPREFIX"].map { URL(fileURLWithPath: $0).standardizedFileURL.path } == wanted
         }
     }
@@ -229,14 +337,15 @@ struct Wine: Sendable {
 
     /// Starts a program detached (it keeps running after this request); output goes to the log.
     func spawn(_ driver: String, _ args: [String], workingDirectory: URL? = nil) throws {
-        guard let bin else { throw BackendError("WINE_MISSING", "Install the windows-wine component first.") }
+        let kind = runtime(driver)
+        guard let bin = bin(kind) else { throw BackendError("WINE_MISSING", "Install the Windows runtime for this device first.") }
         try Files.directory(logs)
         let logURL = log(driver)
         if !FileManager.default.fileExists(atPath: logURL.path) { FileManager.default.createFile(atPath: logURL.path, contents: nil) }
         let handle = try FileHandle(forWritingTo: logURL)
         handle.seekToEndOfFile()
         let process = Process()
-        process.executableURL = bin.appendingPathComponent("wine")
+        process.executableURL = bin.appendingPathComponent(Self.executable(kind))
         process.arguments = args
         process.environment = try environment(driver)
         process.currentDirectoryURL = workingDirectory ?? prefix(driver)

@@ -159,6 +159,13 @@ func configure(_ app: Application, backend: Backend, configuration: Configuratio
         let identity = try idempotency(request)
         return try await accepted(backend.launch(id, request: input, key: identity.key, fingerprint: identity.hash))
     }
+    api.post("artifacts", ":id", "delete") { request in
+        let id = try uuid(request, "id")
+        let input = try decode(request, default: DeleteArtifactRequest())
+        let identity = try idempotency(request)
+        return try await accepted(backend.deleteArtifact(id, uninstall: input.uninstall ?? true,
+                                                         key: identity.key, fingerprint: identity.hash))
+    }
     api.get("operations", ":id") { request in try await json(backend.operation(uuid(request, "id"))) }
 
     api.get("events") { request in

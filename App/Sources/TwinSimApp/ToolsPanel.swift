@@ -320,6 +320,11 @@ struct WindowsTools: View {
             Button { NSWorkspace.shared.open(driveC) } label: { Label("在 Finder 中打开 C 盘", systemImage: "externaldrive") }
                 .disabled(!FileManager.default.fileExists(atPath: driveC.path))
             Divider()
+            if instance.capability("d3dmetal")?.isAvailable == true {
+                Label("此设备使用 Apple D3DMetal：Direct3D 11/12 直接转为 Metal。", systemImage: "bolt.fill")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            if instance.capability("dxvk")?.isSupported == true {
             HStack {
                 Text("图形加速（DXVK）")
                 Spacer()
@@ -328,6 +333,7 @@ struct WindowsTools: View {
             }
             if let reason = instance.capability("dxvk")?.reasonCode {
                 Text(Labels.reason(reason) ?? reason).font(.caption).foregroundStyle(.secondary)
+            }
             }
             HStack {
                 Text("显示")

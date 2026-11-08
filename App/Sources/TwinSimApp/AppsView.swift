@@ -91,6 +91,9 @@ struct ArtifactCard: View {
     let artifact: Artifact
     var highlighted = false
 
+    @State private var confirmingDelete = false
+    @State private var deleting = false
+
     private var launching: Bool { store.launching.contains(artifact.id) }
     private var workspace: Instance? {
         store.instances.first { $0.isAppWorkspace && $0.engineId == artifact.engineId }
@@ -137,6 +140,12 @@ struct ArtifactCard: View {
                     ForEach(devices) { device in
                         Button("在「\(device.displayName)」中打开") { Task { await store.open(artifact, instanceId: device.id) } }
                     }
+                    if artifact.isWindows {
+                        Divider()
+                        Button("用 Windows 桌面（Wine）打开") { Task { await store.open(artifact, profileId: "windows-desktop") } }
+                        Button("用 Windows 游戏（D3DMetal）打开") { Task { await store.open(artifact, profileId: "windows-d3dmetal") } }
+                            .disabled(store.component("windows-d3dmetal")?.isReady != true)
+                    }
                     if artifact.kind == "apk" {
                         Divider()
                         ForEach(["android-aosp", "android-research", "android-magisk", "android-google-apis"], id: \.self) { profile in
@@ -151,6 +160,9 @@ struct ArtifactCard: View {
                         NSPasteboard.general.setString(artifact.bundleId, forType: .string)
                     }
                     Text("SHA-256 \(artifact.sha256.prefix(12))…")
+                    Divider()
+                    Button("删除…", role: .destructive) { confirmingDelete = true }
+                        .disabled(launching || deleting)
                 } label: { Image(systemName: "ellipsis.circle") }
                 .menuStyle(.borderlessButton).fixedSize()
             }
@@ -160,6 +172,30 @@ struct ArtifactCard: View {
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(highlighted ? Color.accentColor : Color.secondary.opacity(0.2)))
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { Task { await store.open(artifact) } }
+        .contextMenu {
+            Button("打开") { Task { await store.open(artifact) } }
+            Divider()
+            Button("删除…", role: .destructive) { confirmingDelete = true }
+        }
+        .opacity(deleting ? 0.4 : 1)
+        .overlay { if deleting { ProgressView() } }
+        .alert("删除「\(artifact.name)」？", isPresented: $confirmingDelete) {
+            Button("删除并从设备卸载", role: .destructive) { delete(uninstall: true) }
+            Button("仅从应用库删除", role: .destructive) { delete(uninstall: false) }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(artifact.isWindows
+                 ? "从应用库删除导入的文件。「删除并从设备卸载」会把它从 Windows 设备的 C:\\TwinSim\\Apps 中移除；.msi 安装包会先运行卸载程序（设备需在运行）。通过安装程序装进 Windows 的软件，请用设备研究工具里的「卸载程序」移除。"
+                 : "从应用库删除导入的文件。「删除并从设备卸载」还会在运行中的设备上卸载它及其数据；未运行的设备会保留已安装的应用。")
+        }
+    }
+
+    private func delete(uninstall: Bool) {
+        deleting = true
+        Task {
+            await store.deleteArtifact(artifact, uninstall: uninstall)
+            deleting = false
+        }
     }
 
     private var launchOperation: BackendOperation? {

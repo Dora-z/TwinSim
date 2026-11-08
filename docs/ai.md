@@ -1,6 +1,6 @@
 # 让 AI 使用 TwinSim
 
-TwinSim 为 AI 提供四种接入方式，底层是同一组工具（共 34 个）。
+TwinSim 为 AI 提供四种接入方式，底层是同一组工具（共 35 个）。
 
 | 方式 | 适用 | 入口 |
 | --- | --- | --- |
@@ -66,7 +66,7 @@ MCP 服务器在 `initialize` 中返回使用说明，包括推荐流程、坐�
 | 概览 | `status`、`list_components`、`list_devices`、`list_apps` |
 | 组件 | `install_component`（需要许可时先返回原文，`acceptLicenses=true` 只能在用户明确同意后使用） |
 | 设备 | `create_device`、`start_device`、`stop_device`、`delete_device`（永久删除，标注为 destructive）、`show_device` |
-| 应用 | `import_app`、`open_app`（可直接传文件路径，复用后台实例和已有安装）、`launch_app`、`uninstall_app` |
+| 应用 | `delete_app`（从应用库删除，可同时从设备卸载，标注为 destructive）、`import_app`、`open_app`（可直接传文件路径，复用后台实例和已有安装）、`launch_app`、`uninstall_app` |
 | 观察 | `screenshot`、`ui_tree`（Android 控件树：文本、resource-id、content-desc、可点击、中心点）、`wait_for_text`、`logs` |
 | 操作 | `tap`、`tap_element`（按文本、ID 或描述点击）、`swipe`、`type_text`、`press_key` |
 | Windows | `windows_tool`（winecfg、regedit、taskmgr、cmd 等）、`windows_settings`（DXVK、Retina/标准显示） |
@@ -83,7 +83,7 @@ MCP 服务器在 `initialize` 中返回使用说明，包括推荐流程、坐�
 
 - Android：全部工具可用。`android-research` 和 `android-google-apis` 配置提供 adb root、系统可写和快照。
 - iOS Simulator：截图、日志、打开和停止应用。后端不支持输入，`tap` 等工具会返回 `CAPABILITY_UNSUPPORTED`。
-- Windows（.exe/.msi，经 Wine）：程序以原生 Mac 窗口运行。`screenshot` 截取程序窗口，需要「录屏与系统录音」权限；`tap`、`type_text`、`press_key` 通过 CGEvent 发送，需要「辅助功能」权限；`shell` 执行 `cmd /c`；`ui_tree`、`swipe` 不适用。
+- Windows（.exe/.msi，经 Wine）：程序以原生 Mac 窗口运行。`profileId: "windows-d3dmetal"` 使用 Apple D3DMetal（Direct3D 11/12 → Metal），需要用户先同意 Apple 的许可并安装 `windows-d3dmetal` 组件。`screenshot` 截取程序窗口，需要「录屏与系统录音」权限；`tap`、`type_text`、`press_key` 通过 CGEvent 发送，需要「辅助功能」权限；`shell` 执行 `cmd /c`；`ui_tree`、`swipe` 不适用。
 - iOS 真机 IPA：需要 vphone 研究虚拟机。宿主机未配置时，`open_app` 返回 `RESEARCH_GUESTS_DISABLED` 等原因。
 
 ## 命令行示例

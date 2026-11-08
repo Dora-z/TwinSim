@@ -93,6 +93,18 @@
 
 未在真实客户端中验证：未在 Claude Code、Claude Desktop、Cursor、VS Code、Codex、Gemini CLI 中实际加载配置，本机未安装这些 CLI。协议层面已由上面的 MCP 客户端测试覆盖。
 
+## 删除应用与 D3DMetal 许可确认
+
+`TWINSIM_SELF_TEST_PLATFORMS=library bash scripts/frontend-e2e.sh`：**12/12 通过**（独立 `TWINSIM_HOME`，不运行 Wine）。
+
+| 项目 | 结果 | 说明 |
+| --- | --- | --- |
+| D3DMetal 许可确认 | 通过 | 组件状态为 `needsConsent`，显示 Apple `License.pdf` 原文（约 16,400 字符，运行时从 PDF 读取） |
+| 导入 apk、Simulator .app、Windows .exe | 通过 | .exe 为仅含文件头的样本，不会运行 |
+| 删除 APK 并从运行中的设备卸载 | 通过 | 1.3 秒。删除后客体中查不到该包 |
+| 删除 .app 和 .exe | 通过 | 存储的副本被删除，服务端应用库为空 |
+| 删除后重新导入 | 通过 | |
+
 ## Windows（Wine）
 
 0.3.0 已加入 Windows 程序支持，通过编译、后端单元测试（PE 识别、进程环境读取、`C:\` 路径映射）和不运行 Wine 的回归测试，组件页正确显示 `windows-wine` 与 `windows-dxvk`。**尚未实际运行 Wine**：下载的 Wine 二进制需要用户自行执行实测。实测命令：

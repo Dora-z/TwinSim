@@ -21,6 +21,7 @@ enum Labels {
         case "ios-development": "iOS 开发 (Simulator)"
         case "ios-research": "iOS 研究 (vphone)"
         case "windows-desktop": "Windows 桌面（Wine）"
+        case "windows-d3dmetal": "Windows 游戏（D3DMetal）"
         default: id
         }
     }
@@ -48,6 +49,7 @@ enum Labels {
         case "ios-vphone": "iOS 研究虚拟机 (vphone)"
         case "windows-wine": "Windows 运行环境（Wine）"
         case "windows-dxvk": "Windows 图形加速（DXVK）"
+        case "windows-d3dmetal": "Windows 游戏加速（Apple D3DMetal）"
         default: id
         }
     }
@@ -61,6 +63,7 @@ enum Labels {
         case "ios-simulator-runtime": "运行 Simulator .app 需要完整 Xcode 和 iOS Simulator runtime。runtime 由 Xcode 下载到系统磁盘（/System/Library/AssetsV2），不能放到外置硬盘；Xcode 本身可以放在外置硬盘，并在设置中用 DEVELOPER_DIR 指定。"
         case "ios-vphone": "运行真机 IPA 的研究虚拟机，由上游 vphone Launchpad 配置。"
         case "windows-wine": "WineHQ 上游 Wine（staging，macOS 构建），不依赖 CrossOver。在 Mac 上运行 32/64 位 Windows 程序（.exe/.msi），经 Rosetta 2 转译；Direct3D 通过 Vulkan → MoltenVK → Metal 渲染，已内置 Wine Mono 与 Gecko。"
+        case "windows-d3dmetal": "可选。Apple Game Porting Toolkit 3.0 的 Wine（由 Apple 开源的 GPTK 源码构建）与 Apple D3DMetal，把 Direct3D 11/12 直接转为 Metal，适合 DX11/DX12 游戏；支持 32/64 位程序。使用 Gcenx 的二进制发行版（约 240 MB，SHA-256 固定）。D3DMetal 受 Apple 许可约束，安装前需阅读并同意 Apple 的许可原文。安装后创建「Windows 游戏（D3DMetal）」设备，或在应用的「…」菜单中选择用 D3DMetal 打开。"
         case "windows-dxvk": "可选。DXVK（异步着色器编译）把 Direct3D 10/11 转为 Vulkan，游戏和 3D 程序通常更快更稳定。在设备的研究工具中按设备开启。"
         default: ""
         }
@@ -100,6 +103,7 @@ enum Labels {
         case "wine-tool": "打开 Windows 工具"
         case "dxvk": "图形加速"
         case "display": "显示模式"
+        case "delete-app": "删除应用"
         case "install": "安装应用"
         case "launch": "启动应用"
         case "uninstall": "卸载应用"
@@ -129,6 +133,8 @@ enum Labels {
         case "downloading-wine": return "下载 Wine"
         case "extracting-wine": return "解压 Wine"
         case "downloading-dxvk": return "下载 DXVK"
+        case "downloading-d3dmetal": return "下载 Game Porting Toolkit（D3DMetal）"
+        case "extracting-d3dmetal": return "解压 Game Porting Toolkit"
         case "verifying": return "校验"
         default: return id
         }
@@ -153,6 +159,7 @@ enum Labels {
         case "installWindowsApp": "安装 Windows 程序"
         case "windowsTools": "Windows 工具"
         case "dxvk": "DXVK 图形加速"
+        case "d3dmetal": "D3DMetal"
         default: id
         }
     }
@@ -197,6 +204,10 @@ enum Labels {
             return "运行 Windows 程序需要 Rosetta 2。在终端运行 `softwareupdate --install-rosetta`，完成后重新检查。"
         case "WINE_MISSING":
             return "需要先在「组件」页安装 Windows 运行环境（Wine）。"
+        case "D3DMETAL_MISSING":
+            return "需要先在「组件」页安装 Windows 游戏加速（Apple D3DMetal），并同意 Apple 的许可。"
+        case "LICENSE_UNAVAILABLE":
+            return "无法获取 Apple Game Porting Toolkit 的许可原文，请检查网络后点「重新检查」。"
         case "DXVK_MISSING":
             return "需要先在「组件」页安装 Windows 图形加速（DXVK）。"
         case "NO_WINDOW":

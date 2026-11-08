@@ -289,7 +289,8 @@ struct CreateDeviceSheet: View {
     private var missing: [Component] {
         guard let engine else { return [] }
         let needed = engine.componentIds.filter { id in
-            id != "android-display" && id != "windows-dxvk" && (id == "android-engine" || id == "ios-vphone" || id == "ios-simulator-runtime" || id == "windows-wine" ||
+            id != "android-display" && id != "windows-dxvk" && (id == "android-engine" || id == "ios-vphone" || id == "ios-simulator-runtime" ||
+                                        id == (profileId == "windows-d3dmetal" ? "windows-d3dmetal" : "windows-wine") ||
                                         id == (profileId == "android-google-apis" ? "android-google-apis" : "android-runtime"))
         }
         return needed.compactMap { store.component($0) }.filter { !$0.isReady }

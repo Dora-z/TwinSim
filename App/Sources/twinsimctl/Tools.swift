@@ -316,7 +316,7 @@ final class Agent {
             let hello = (try? bridge.request(["type": "hello"])) ?? [:]
             return .json(["dataDirectory": hello["dataDirectory"] ?? "", "components": comps, "devices": try instances().map(summarize(device:)),
                           "apps": try artifacts().map(summarize(app:)),
-                          "notes": "Android: full touch/keys/UI tree/shell. iOS Simulator: screenshots and logs only. Windows (.exe/.msi via Wine): native Mac windows; screenshot of the program window, tap/type_text/press_key (needs Accessibility permission), cmd shell, windows_tool, windows_settings. Device IPAs need the iOS research VM (vphone)."])
+                          "notes": "Android: full touch/keys/UI tree/shell. iOS Simulator: screenshots and logs only. Windows (.exe/.msi via Wine, or Apple D3DMetal with profileId windows-d3dmetal for DX11/12 games): native Mac windows; screenshot of the program window, tap/type_text/press_key (needs Accessibility permission), cmd shell, windows_tool, windows_settings. Device IPAs need the iOS research VM (vphone)."])
         })
 
         t.append(Tool(name: "list_components", description: "Engines and runtimes with install status (ready, downloadable, needsConsent, blocked, externalSetup) and reasons.", readOnly: true) { [unowned self] _ in
@@ -362,8 +362,8 @@ final class Agent {
             .json(try instances().map(summarize(device:)))
         })
 
-        t.append(Tool(name: "create_device", description: "Create a full device. Profiles: android-aosp, android-research (adb root), android-magisk, android-google-apis (API 34 Google APIs, adb root), ios-development (iOS Simulator), ios-research (vphone VM), windows-desktop (Wine prefix for Windows programs). Set start=true to boot it.",
-                      properties: ["profileId": prop("string", "Device profile.", enum: ["android-aosp", "android-research", "android-magisk", "android-google-apis", "ios-development", "ios-research", "windows-desktop"]),
+        t.append(Tool(name: "create_device", description: "Create a full device. Profiles: android-aosp, android-research (adb root), android-magisk, android-google-apis (API 34 Google APIs, adb root), ios-development (iOS Simulator), ios-research (vphone VM), windows-desktop (Wine prefix for Windows programs), windows-d3dmetal (Apple Game Porting Toolkit Wine with D3DMetal for DX11/12 games). Set start=true to boot it.",
+                      properties: ["profileId": prop("string", "Device profile.", enum: ["android-aosp", "android-research", "android-magisk", "android-google-apis", "ios-development", "ios-research", "windows-desktop", "windows-d3dmetal"]),
                                    "name": prop("string", "Display name."),
                                    "start": prop("boolean", "Boot after creating (default true)."),
                                    "showWindow": prop("boolean", "Open the device window in the TwinSim UI (default false).")],
@@ -442,11 +442,13 @@ final class Agent {
             if let ref = a.string("device") { body["instanceId"] = Self.id(try device(ref)) }
             else if let profile = a.string("profileId") { body["profileId"] = profile }
             else if kind == "apk" && !ready("android-runtime") && ready("android-google-apis") { body["profileId"] = "android-google-apis" }
+            let windowsComponent = (body["profileId"] as? String) == "windows-d3dmetal" ? "windows-d3dmetal" : "windows-wine"
             if kind == "windowsExe" || kind == "windowsMsi", body["instanceId"] == nil,
-               let wine = comps.first(where: { $0["id"] as? String == "windows-wine" }), wine["status"] as? String != "ready" {
+               let wine = comps.first(where: { $0["id"] as? String == windowsComponent }), wine["status"] as? String != "ready" {
                 let reason = wine["reasonCode"] as? String ?? "WINE_MISSING"
-                throw AgentError(reason, "Windows programs need the windows-wine component (status: \(wine["status"] ?? "?")).",
-                                 hint: reason == "ROSETTA_MISSING" ? Hints.for(reason) : "Call install_component with componentId windows-wine (about 230 MB download).")
+                throw AgentError(reason, "This needs the \(windowsComponent) component (status: \(wine["status"] ?? "?")).",
+                                 hint: reason == "ROSETTA_MISSING" ? Hints.for(reason)
+                                    : "Call install_component with componentId \(windowsComponent)" + (windowsComponent == "windows-d3dmetal" ? " (Apple license consent required from the user)." : " (about 230 MB download)."))
             }
             if kind == "ipa", body["instanceId"] == nil, let vphone = comps.first(where: { $0["id"] as? String == "ios-vphone" }),
                vphone["status"] as? String != "ready" {
@@ -465,6 +467,18 @@ final class Agent {
                 ? "The program opens in its own window on the Mac (it may take a few seconds). Use screenshot / tap / type_text / press_key with device=\(instance)."
                 : "Use screenshot (and ui_tree on Android) with device=\(instance)."
             return .json(out)
+        })
+
+        t.append(Tool(name: "delete_app", description: "Delete an imported app from the TwinSim library. uninstall=true (default) also uninstalls it from devices it was installed on (running Android/iOS devices; Windows devices also when stopped). Only when the user asked to delete it.",
+                      properties: ["app": prop("string", "Imported app ID, bundle ID or name."),
+                                   "uninstall": prop("boolean", "Also uninstall from devices (default true).")],
+                      required: ["app"], destructive: true) { [unowned self] a in
+            let artifact = try app(try a.require("app"))
+            let op = try operation("/artifacts/\(Self.id(artifact))/delete", body: ["uninstall": a.bool("uninstall") ?? true], wait: cap(900))
+            let result = op["result"] as? [String: String] ?? [:]
+            var text = "Deleted \(artifact["name"] ?? "") from the library; uninstalled from \(result["uninstalled"] ?? "0") device(s)."
+            if let skipped = result["notUninstalled"] { text += " Not uninstalled (device not running): \(skipped)." }
+            return .text(text)
         })
 
         t.append(Tool(name: "launch_app", description: "Launch an installed app by bundle ID / package name on a running device.",
