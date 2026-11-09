@@ -181,7 +181,9 @@ struct Wine: Sendable {
     func gptkLicense() async throws -> LicenseText {
         if Files.size(gptkLicenseFile) == 0 || (try? Files.sha256(gptkLicenseFile)) != Self.gptkLicenseChecksum {
             try Files.directory(gptkLicenseFile.deletingLastPathComponent())
-            let partial = gptkLicenseFile.appendingPathExtension("download")
+            // Unique temp name: component listings can run concurrently.
+            let partial = gptkLicenseFile.deletingLastPathComponent().appendingPathComponent(".license-\(UUID().uuidString).download")
+            defer { try? FileManager.default.removeItem(at: partial) }
             _ = try await Command("/usr/bin/curl", ["--fail", "--location", "--silent", "--show-error", "--connect-timeout", "15",
                                                    "--max-time", "60", "--output", partial.path, Self.gptkLicenseURL], timeout: 90)
                 .run(in: scratch)
@@ -189,8 +191,11 @@ struct Wine: Sendable {
                 try? FileManager.default.removeItem(at: partial)
                 throw BackendError("LICENSE_UNAVAILABLE", "The Game Porting Toolkit license did not match its pinned checksum.", retryable: true)
             }
-            try? FileManager.default.removeItem(at: gptkLicenseFile)
-            try FileManager.default.moveItem(at: partial, to: gptkLicenseFile)
+            if (try? Files.sha256(gptkLicenseFile)) != Self.gptkLicenseChecksum {
+                try? FileManager.default.removeItem(at: gptkLicenseFile)
+                do { try FileManager.default.moveItem(at: partial, to: gptkLicenseFile) }
+                catch where (try? Files.sha256(gptkLicenseFile)) == Self.gptkLicenseChecksum { /* another fetch finished first */ }
+            }
         }
         guard let text = PDFDocument(url: gptkLicenseFile)?.string, !text.isEmpty else {
             throw BackendError("LICENSE_UNAVAILABLE", "The Game Porting Toolkit license could not be read.", retryable: true)

@@ -77,6 +77,13 @@ final class AppStore {
     @ObservationIgnored private let sessions = NSMapTable<NSUUID, ScreenSession>.strongToWeakObjects()
     func register(_ session: ScreenSession) { sessions.setObject(session, forKey: session.instanceId as NSUUID) }
     func screenSession(_ id: UUID) -> ScreenSession? { sessions.object(forKey: id as NSUUID) }
+    @ObservationIgnored private let appWindows = NSMapTable<NSUUID, AppWindowSession>.strongToWeakObjects()
+    func registerAppWindow(_ session: AppWindowSession) { appWindows.setObject(session, forKey: session.target.artifactId as NSUUID) }
+    func appWindow(_ artifactId: UUID) -> AppWindowSession? { appWindows.object(forKey: artifactId as NSUUID) }
+
+    /// Android apps open in their own native-style window (virtual display) unless turned off in Settings.
+    static let androidAppWindowsKey = "androidAppWindows"
+    var androidAppWindows: Bool { UserDefaults.standard.object(forKey: Self.androidAppWindowsKey) as? Bool ?? true }
     var helperPID: Int32? { process?.isRunning == true ? process?.pid : nil }
 
     func instance(_ id: UUID) -> Instance? { instances.first { $0.id == id } }
@@ -630,7 +637,8 @@ final class AppStore {
 
     /// Opens an application: reuses the app workspace instance and existing install, then shows
     /// the application window.
-    func open(_ artifact: Artifact, instanceId: UUID? = nil, profileId requestedProfile: String? = nil) async {
+    func open(_ artifact: Artifact, instanceId: UUID? = nil, profileId requestedProfile: String? = nil,
+              forceDeviceView: Bool = false) async {
         let profileId = instanceId == nil ? (requestedProfile ?? preferredProfile(for: artifact)) : nil
         if instanceId == nil, let blocker = launchBlocker(for: artifact) {
             post(blocker)
@@ -640,15 +648,22 @@ final class AppStore {
         launching.insert(artifact.id)
         defer { launching.remove(artifact.id) }
         do {
+            let appWindow = artifact.kind == "apk" && androidAppWindows && !forceDeviceView
             let accepted = try await submit { client, key in
-                try await client.launch(artifact.id, instanceId: instanceId, profileId: profileId, key: key)
+                try await client.launch(artifact.id, instanceId: instanceId, profileId: profileId,
+                                        launch: appWindow ? false : nil, key: key)
             }
             let op = try await wait(accepted.operationId)
             let target = op.result?["instanceId"].flatMap(UUID.init(uuidString:)) ?? accepted.instanceId
             await reloadInstances()
-            // Windows programs open their own native Mac windows; other platforms get a TwinSim window.
-            if let target, !artifact.isWindows {
-                openWindowAction?(value: ScreenTarget(instanceId: target, artifactId: artifact.id))
+            // Android apps: own window with only the app. Windows programs open native Mac windows.
+            // Others: the TwinSim device window.
+            if let target {
+                if appWindow {
+                    openWindowAction?(value: AppWindowTarget(instanceId: target, artifactId: artifact.id))
+                } else if !artifact.isWindows {
+                    openWindowAction?(value: ScreenTarget(instanceId: target, artifactId: artifact.id))
+                }
             }
         } catch is CancellationError {
         } catch {

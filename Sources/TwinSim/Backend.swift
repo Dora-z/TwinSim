@@ -390,7 +390,7 @@ actor Backend {
             _ = try await backend.prepare(target.id)
             try await backend.start(target.id)
             try await backend.install(target.id, artifact)
-            try await backend.launchApp(target.id, bundle: artifact.bundleId)
+            if request.launch != false { try await backend.launchApp(target.id, bundle: artifact.bundleId) }
             return ["instanceId": target.id.uuidString, "bundleId": artifact.bundleId]
         }
     }
@@ -444,7 +444,9 @@ actor Backend {
         if device.driverID != nil { return device }
         let driverID: String
         switch device.engineId {
-        case .android: driverID = try await android.create(device)
+        case .android:
+            driverID = try await android.create(device)
+            device.hardwareTuning = Android.tuningLevel
         case .simulator: driverID = try await simulator.create(device)
         case .vphone: driverID = try await vphone.create(device, externalName: device.externalName)
         case .windows: driverID = try await windows.create(device)
@@ -462,6 +464,13 @@ actor Backend {
         try put(device)
         switch device.engineId {
         case .android:
+            if device.hardwareTuning != Android.tuningLevel {
+                // Older devices used 2 cores / 2 GB; give them room for the software video encoder.
+                if (try? await android.tune(driver)) != nil {
+                    device.hardwareTuning = Android.tuningLevel
+                    try put(device)
+                }
+            }
             try await android.start(driver)
             let uid = try? await android.adb(driver, ["shell", "id", "-u"])
             let selinux = try? await android.adb(driver, ["shell", "getenforce"])
@@ -856,6 +865,29 @@ actor Backend {
         }
         do { return try await androidVideo.open(driver) }
         catch { streaming.remove(id); throw error }
+    }
+
+    /// Opens a window-sized virtual display for one app (Android) and starts the app on it.
+    func openAppSession(_ id: UUID, package: String, width: Int, height: Int, dpi: Int, fps: Int) async throws -> AppSession {
+        _ = try await refresh(id)
+        let device = try running(id)
+        guard device.engineId == .android, let driver = device.driverID else {
+            throw BackendError("CAPABILITY_UNSUPPORTED", "App windows are available for Android instances.")
+        }
+        guard Importer.identifier(package), !package.contains("/") else { throw BackendError("INVALID_BUNDLE_ID", "Specify a package name.") }
+        let w = min(max(width, 240), 3840) & ~1, h = min(max(height, 240), 3840) & ~1
+        return try await androidVideo.openApp(driver, package: package, width: w, height: h,
+                                              dpi: min(max(dpi, 80), 640), fps: min(max(fps, 15), 120))
+    }
+
+    /// Input-only channel to the main display (device view).
+    func openControlSession(_ id: UUID) async throws -> ControlSession {
+        _ = try await refresh(id)
+        let device = try running(id)
+        guard device.engineId == .android, let driver = device.driverID else {
+            throw BackendError("CAPABILITY_UNSUPPORTED", "The input channel is available for Android instances.")
+        }
+        return try await androidVideo.openControl(driver)
     }
 
     func closeVideo(_ id: UUID, session: VideoSession) async {

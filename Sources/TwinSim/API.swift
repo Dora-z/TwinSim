@@ -129,6 +129,62 @@ func configure(_ app: Application, backend: Backend, configuration: Configuratio
         })
         return Response(status: .ok, headers: ["Content-Type": "video/h264"], body: body)
     }
+    // App window: binary frames out = H.264 Annex B; binary frames in = scrcpy control messages.
+    api.webSocket("instances", ":id", "app-session", maxFrameSize: WebSocketMaxFrameSize(integerLiteral: 1 << 20)) { request, ws in
+        Task {
+            let session: AppSession
+            do {
+                let id = try uuid(request, "id")
+                let package = try request.query.get(String.self, at: "package")
+                session = try await backend.openAppSession(
+                    id, package: package,
+                    width: (try? request.query.get(Int.self, at: "width")) ?? 1080,
+                    height: (try? request.query.get(Int.self, at: "height")) ?? 2340,
+                    dpi: (try? request.query.get(Int.self, at: "dpi")) ?? 320,
+                    fps: (try? request.query.get(Int.self, at: "fps")) ?? 60)
+            } catch {
+                let failure = BackendError.wrap(error)
+                let body = (try? JSONEncoder().encode(failure)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+                try? await ws.send("{\"type\":\"error\",\"error\":\(body)}")
+                try? await ws.close(code: .unexpectedServerError)
+                return
+            }
+            try? await ws.send("{\"type\":\"ready\"}")
+            ws.onBinary { _, buffer in
+                let bytes = buffer.getBytes(at: buffer.readerIndex, length: buffer.readableBytes) ?? []
+                guard AppSession.allowed(bytes) else { return }
+                await session.sendControl(bytes)
+            }
+            ws.onClose.whenComplete { _ in Task { await session.close() } }
+            do {
+                while let chunk = try await session.read() { try await ws.send(Array(chunk)) }
+            } catch {}
+            await session.close()
+            try? await ws.close()
+        }
+    }
+    // Device view input: binary frames in = scrcpy control messages for the main display.
+    api.webSocket("instances", ":id", "control-session", maxFrameSize: WebSocketMaxFrameSize(integerLiteral: 1 << 20)) { request, ws in
+        Task {
+            let session: ControlSession
+            do {
+                session = try await backend.openControlSession(try uuid(request, "id"))
+            } catch {
+                let body = (try? JSONEncoder().encode(BackendError.wrap(error))).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+                try? await ws.send("{\"type\":\"error\",\"error\":\(body)}")
+                try? await ws.close(code: .unexpectedServerError)
+                return
+            }
+            try? await ws.send("{\"type\":\"ready\"}")
+            ws.onBinary { _, buffer in
+                let bytes = buffer.getBytes(at: buffer.readerIndex, length: buffer.readableBytes) ?? []
+                guard AppSession.allowed(bytes) else { return }
+                await session.send(bytes)
+            }
+            try? await ws.onClose.get()
+            await session.close()
+        }
+    }
     api.get("instances", ":id", "logs") { request in
         let lines = (try? request.query.get(Int.self, at: "lines")) ?? 200
         return try await json(["text": backend.logs(uuid(request, "id"), lines: lines)])

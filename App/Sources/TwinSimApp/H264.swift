@@ -135,6 +135,8 @@ final class H264Decoder {
     private(set) var waitingForKeyframe = true
     private(set) var decodedFrames = 0
     private(set) var decodeErrors = 0
+    /// Whether VideoToolbox runs this session on the hardware decoder (Apple media engine).
+    private(set) var usingHardware = false
     private var keyframeWaitStarted = Date()
     var onFrame: ((CVPixelBuffer) -> Void)?
 
@@ -233,18 +235,32 @@ final class H264Decoder {
         }
         guard status == noErr, let description else { decodeErrors += 1; return false }
         format = description
+        // Native decoder output (4:2:0 YUV) in IOSurfaces: no per-frame colour conversion; the
+        // display layer composites YUV on the GPU.
         let attributes: [CFString: Any] = [
-            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
             kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
             kCVPixelBufferMetalCompatibilityKey: true,
         ]
-        let spec: [CFString: Any] = [kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder: true]
-        var newSession: VTDecompressionSession?
-        let created = VTDecompressionSessionCreate(allocator: kCFAllocatorDefault, formatDescription: description,
-                                                   decoderSpecification: spec as CFDictionary,
-                                                   imageBufferAttributes: attributes as CFDictionary,
-                                                   outputCallback: nil, decompressionSessionOut: &newSession)
-        guard created == noErr, let newSession else { decodeErrors += 1; return false }
+        func create(_ spec: [CFString: Any]) -> VTDecompressionSession? {
+            var session: VTDecompressionSession?
+            let status = VTDecompressionSessionCreate(allocator: kCFAllocatorDefault, formatDescription: description,
+                                                      decoderSpecification: spec as CFDictionary,
+                                                      imageBufferAttributes: attributes as CFDictionary,
+                                                      outputCallback: nil, decompressionSessionOut: &session)
+            return status == noErr ? session : nil
+        }
+        // Require the hardware decoder; fall back to software only if the hardware path refuses
+        // this stream (unusual sizes or profiles).
+        guard let newSession = create([kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: true])
+                ?? create([kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder: true]) else {
+            decodeErrors += 1
+            return false
+        }
+        var hardware: CFTypeRef?
+        VTSessionCopyProperty(newSession, key: kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder,
+                              allocator: kCFAllocatorDefault, valueOut: &hardware)
+        usingHardware = (hardware as? Bool) ?? false
         VTSessionSetProperty(newSession, key: kVTDecompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         session = newSession
         waitingForKeyframe = true

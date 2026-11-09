@@ -22,7 +22,9 @@ mkdir -p "$dir/home"
 # it boots) runs in the user's GUI session. The ANDROID_HOME/DEVELOPER_DIR of this shell are not
 # inherited; the app reads them from its settings.
 # (`open --stderr` fails with LaunchServices error -10810 here, so the self-test writes its own log.)
-open -W -n "$app" \
+extra=()
+[[ -n ${TWINSIM_APPWINDOW_DENSITY:-} ]] && extra+=(--env "TWINSIM_APPWINDOW_DENSITY=$TWINSIM_APPWINDOW_DENSITY")
+open -W -n "$app" ${extra[@]+"${extra[@]}"} \
     --env "TWINSIM_HOME=$dir/home" \
     --env "TWINSIM_SELF_TEST=$dir/report" \
     --env "TWINSIM_SELF_TEST_SAMPLES=$samples" \

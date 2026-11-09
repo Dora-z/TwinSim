@@ -97,8 +97,12 @@ struct ScreenWindow: View {
                         .foregroundStyle(session.source == .video && session.fps > 0 ? .green : .secondary)
                     Text(session.status).lineLimit(1)
                     Spacer()
-                    if session.source == .video { Text("\(Int(session.fps)) fps").monospacedDigit() }
+                    if session.source == .video {
+                        Text("\(Int(session.fps)) fps").monospacedDigit()
+                        if let hw = session.hardwareDecoding { Text(hw ? "硬件解码" : "软件解码").foregroundStyle(hw ? .green : .orange) }
+                    }
                     if let size = session.guestSize { Text("\(Int(size.width))×\(Int(size.height))").monospacedDigit() }
+                    if session.liveInput { Image(systemName: "hand.tap.fill").foregroundStyle(.green).help("快速输入通道已连接") }
                     if session.pendingInputs > 0 { ProgressView().controlSize(.mini) }
                 }
                 if let error = session.videoError {

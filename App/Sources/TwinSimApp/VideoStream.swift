@@ -32,6 +32,7 @@ final class VideoStream: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private var finished = false
     private var stallReported = false
     private(set) var stats = Stats()
+    var usingHardware: Bool { queue.sync { decoder.usingHardware } }
 
     /// Frames are delivered on the video queue.
     var onFrame: ((CVPixelBuffer) -> Void)?

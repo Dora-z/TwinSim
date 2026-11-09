@@ -1,31 +1,78 @@
 import AppKit
+import AVFoundation
+import CoreMedia
 import CoreVideo
 import Foundation
 import Observation
 import QuartzCore
 
-/// Displays decoded frames by handing their IOSurface to a CALayer.
+/// Container that keeps its sublayers (video, screenshot) filling its bounds.
+final class FillLayer: CALayer {
+    override func layoutSublayers() {
+        super.layoutSublayers()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        sublayers?.forEach { $0.frame = bounds }
+        CATransaction.commit()
+    }
+}
+
+/// Displays decoded YUV frames through AVSampleBufferDisplayLayer (GPU colour conversion, no
+/// copies) and screenshots through a plain image layer.
 final class VideoRenderer: @unchecked Sendable {
     let layer: CALayer = {
-        let layer = CALayer()
-        layer.contentsGravity = .resizeAspect
+        let layer = FillLayer()
         layer.backgroundColor = NSColor.black.cgColor
         layer.isOpaque = true
+        layer.needsDisplayOnBoundsChange = true
         return layer
     }()
-    private var recent: [CVPixelBuffer] = []   // keep surfaces alive while the layer shows them
+    private let videoLayer: AVSampleBufferDisplayLayer = {
+        let layer = AVSampleBufferDisplayLayer()
+        layer.videoGravity = .resizeAspect
+        layer.backgroundColor = NSColor.black.cgColor
+        return layer
+    }()
+    private let imageLayer: CALayer = {
+        let layer = CALayer()
+        layer.contentsGravity = .resizeAspect
+        layer.isHidden = true
+        return layer
+    }()
+    private var last: CVPixelBuffer?
+    private var format: CMVideoFormatDescription?
     var onSize: ((CGSize) -> Void)?
-    var lastBuffer: CVPixelBuffer? { recent.last }
+    var lastBuffer: CVPixelBuffer? { last }
+
+    init() {
+        for sublayer in [videoLayer, imageLayer] {
+            sublayer.frame = layer.bounds
+            layer.addSublayer(sublayer)
+        }
+    }
 
     func show(_ buffer: CVPixelBuffer) {
         DispatchQueue.main.async { [self] in
-            guard let surface = CVPixelBufferGetIOSurface(buffer)?.takeUnretainedValue() else { return }
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            layer.contents = surface
-            CATransaction.commit()
-            recent.append(buffer)
-            if recent.count > 3 { recent.removeFirst() }
+            if format == nil || !CMVideoFormatDescriptionMatchesImageBuffer(format!, imageBuffer: buffer) {
+                var description: CMVideoFormatDescription?
+                CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: buffer, formatDescriptionOut: &description)
+                format = description
+            }
+            guard let format else { return }
+            var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()),
+                                            decodeTimeStamp: .invalid)
+            var sample: CMSampleBuffer?
+            guard CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: buffer,
+                                                           formatDescription: format, sampleTiming: &timing,
+                                                           sampleBufferOut: &sample) == noErr, let sample else { return }
+            if let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true) as? [NSMutableDictionary] {
+                attachments.first?[kCMSampleAttachmentKey_DisplayImmediately] = true
+            }
+            if videoLayer.status == .failed { videoLayer.flush() }
+            imageLayer.isHidden = true
+            videoLayer.isHidden = false
+            videoLayer.enqueue(sample)
+            last = buffer
             onSize?(CGSize(width: CVPixelBufferGetWidth(buffer), height: CVPixelBufferGetHeight(buffer)))
         }
     }
@@ -33,9 +80,11 @@ final class VideoRenderer: @unchecked Sendable {
     func show(_ image: CGImage?) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        layer.contents = image
+        imageLayer.contents = image
+        imageLayer.isHidden = image == nil
+        videoLayer.isHidden = image != nil
         CATransaction.commit()
-        recent.removeAll()
+        if image != nil { videoLayer.flushAndRemoveImage(); last = nil }
     }
 }
 
@@ -52,13 +101,19 @@ final class ScreenSession {
     var guestSize: CGSize?          // real guest display size, used for touch coordinates
     var fps: Double = 0
     var stats = VideoStream.Stats()
+    /// nil until the first stream; true when VideoToolbox decodes on the hardware decoder.
+    var hardwareDecoding: Bool?
     var pendingInputs = 0
     var lastInputError: String?
     var lastTap: CGPoint?
     var paused = false
 
     let renderer = VideoRenderer()
+    /// Fast input for Android (scrcpy control on the main display); nil for other platforms.
+    private(set) var control: ControlChannel?
+    var liveInput: Bool { control?.isReady == true && guestSize != nil }
     @ObservationIgnored private weak var store: AppStore?
+    @ObservationIgnored private var tapChain: Task<Void, Never>?
     @ObservationIgnored private var stream: VideoStream?
     @ObservationIgnored private var reconnectTask: Task<Void, Never>?
     @ObservationIgnored private var pollTask: Task<Void, Never>?
@@ -91,15 +146,33 @@ final class ScreenSession {
                 guard let self else { return }
                 self.fps = Double(self.frameCounter)
                 self.frameCounter = 0
-                if let stream = self.stream { self.stats = stream.stats }
+                if let stream = self.stream {
+                    self.stats = stream.stats
+                    if stream.stats.decodedFrames > 0 { self.hardwareDecoding = stream.usingHardware }
+                }
             }
         }
         Task { await refreshGuestSize() }
         chooseSource()
+        openControlIfNeeded()
+    }
+
+    private func openControlIfNeeded() {
+        guard active, control == nil, let instance, instance.isAndroid, instance.isReady,
+              instance.can("input"), let client = store?.client else { return }
+        let channel = ControlChannel()
+        control = channel
+        channel.connect(client: client, instanceId: instanceId)
+    }
+
+    private func closeControl() {
+        control?.close()
+        control = nil
     }
 
     func deactivate() {
         active = false
+        closeControl()
         stopVideo()
         pollTask?.cancel(); pollTask = nil
         statsTask?.cancel(); statsTask = nil
@@ -113,6 +186,7 @@ final class ScreenSession {
     func instanceChanged() {
         guard active else { return }
         guard let instance, instance.isReady else {
+            closeControl()
             stopVideo()
             pollTask?.cancel(); pollTask = nil
             source = .none
@@ -120,6 +194,8 @@ final class ScreenSession {
             return
         }
         if source == .none { chooseSource() }
+        if case .failed = control?.phase { closeControl() }   // e.g. after a backend restart
+        openControlIfNeeded()
     }
 
     func chooseSource() {
@@ -347,7 +423,37 @@ final class ScreenSession {
         return CGPoint(x: min(size.width - 1, x.rounded(.down)), y: min(size.height - 1, y.rounded(.down)))
     }
 
+    /// Live touch from the canvas (down/move/up as they happen). Returns false when the fast
+    /// channel is not available, so the canvas falls back to tap/swipe on release.
+    func liveTouch(_ action: ScrcpyControl.TouchAction, normalized p: CGPoint) -> Bool {
+        guard liveInput, let control, let size = guestSize, let point = guestPoint(normalized: p) else { return false }
+        if action == .up { lastTap = point }
+        control.send(ScrcpyControl.touch(action, x: Int(point.x), y: Int(point.y), width: Int(size.width), height: Int(size.height),
+                                         pressure: action == .up ? 0 : 1))
+        if source == .screenshots, action == .up { Task { try? await Task.sleep(for: .milliseconds(250)); await captureScreenshot(updateDisplay: true) } }
+        return true
+    }
+
+    func liveScroll(normalized p: CGPoint, dx: Double, dy: Double) {
+        guard liveInput, let control, let size = guestSize, let point = guestPoint(normalized: p) else { return }
+        control.send(ScrcpyControl.scroll(x: Int(point.x), y: Int(point.y), width: Int(size.width), height: Int(size.height),
+                                          horizontal: dx, vertical: dy))
+    }
+
     func tap(normalized p: CGPoint) {
+        // A real tap keeps the finger down briefly; zero-length taps can be dropped in bursts.
+        // Taps are chained so one finger is never put down twice.
+        if liveInput {
+            let previous = tapChain
+            tapChain = Task { [weak self] in
+                await previous?.value
+                guard let self, self.liveTouch(.down, normalized: p) else { return }
+                try? await Task.sleep(for: .milliseconds(40))
+                _ = self.liveTouch(.up, normalized: p)
+                try? await Task.sleep(for: .milliseconds(15))
+            }
+            return
+        }
         guard instance?.can("input") == true, let point = guestPoint(normalized: p) else { return }
         lastTap = point
         enqueue("tap", ["x": Int(point.x), "y": Int(point.y)])
@@ -363,6 +469,13 @@ final class ScreenSession {
     }
 
     func key(_ code: String) {
+        let androidKeys: [String: ScrcpyControl.Key] = ["KEYCODE_BACK": .back, "KEYCODE_HOME": .home, "KEYCODE_APP_SWITCH": .appSwitch,
+                                                        "KEYCODE_ENTER": .enter, "KEYCODE_DEL": .del]
+        if liveInput, let control, let key = androidKeys[code] {
+            control.send(ScrcpyControl.key(key, down: true))
+            control.send(ScrcpyControl.key(key, down: false))
+            return
+        }
         guard instance?.can("input") == true else { return }
         enqueue("key", ["value": code])
     }
@@ -370,6 +483,10 @@ final class ScreenSession {
     func typeText(_ text: String) {
         if instance?.isWindows == true, instance?.can("input") == true, !text.isEmpty {
             enqueue("text", ["value": text]); return
+        }
+        if instance?.isAndroid == true, liveInput, let control, !text.isEmpty {
+            control.send(ScrcpyControl.needsPaste(text) ? ScrcpyControl.paste(text) : ScrcpyControl.text(text))
+            return
         }
         guard instance?.can("guestShell") == true, instance?.isAndroid == true, !text.isEmpty else { return }
         // `input text` treats %s as space; other shell metacharacters are passed as one argv element.

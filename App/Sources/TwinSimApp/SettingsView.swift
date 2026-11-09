@@ -22,6 +22,23 @@ struct SettingsView: View {
                 Text("留空时由后端自动选择。修改后会重新启动后端，已运行的设备继续由引擎管理并重新核对状态。")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section {
+                Toggle("Android 应用以独立窗口打开", isOn: Binding(
+                    get: { UserDefaults.standard.object(forKey: AppStore.androidAppWindowsKey) as? Bool ?? true },
+                    set: { UserDefaults.standard.set($0, forKey: AppStore.androidAppWindowsKey) }))
+                Picker("画面", selection: Binding(
+                    get: { UserDefaults.standard.string(forKey: AppWindowSession.qualityKey) ?? "balanced" },
+                    set: { UserDefaults.standard.set($0, forKey: AppWindowSession.qualityKey) })) {
+                    Text("清晰（Retina 2×）").tag("sharp")
+                    Text("均衡（1.5×，默认）").tag("balanced")
+                    Text("流畅（1×）").tag("smooth")
+                }
+            } header: {
+                Text("应用窗口")
+            } footer: {
+                Text("打开 APK 时只显示应用本身：独立的 Mac 窗口，无 Android 状态栏和导航栏，1 dp = 1 点，可调整大小。鼠标即手指，滚轮/触控板滚动，键盘与输入法直接输入，Esc 或右键为返回，⌘V 粘贴。关闭后改为显示完整设备画面。模拟器只有软件视频编码器，「清晰」帧率最低、「流畅」帧率最高，新打开的窗口生效。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             DataLocationSection()
             Section("后端") {
                 LabeledContent("状态") { Text(statusText) }

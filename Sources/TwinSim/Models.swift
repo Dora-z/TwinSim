@@ -70,6 +70,8 @@ struct Device: Codable, Sendable {
     var selinux: String? = nil
     var installed: [String: UUID] = [:]
     var forwardedPorts: [Int]? = nil
+    /// Hardware tuning level applied to the engine device (Android: CPU cores and RAM).
+    var hardwareTuning: Int? = nil
 
     var driverName: String { "twinsim-" + id.uuidString.lowercased() }
 }
@@ -190,6 +192,8 @@ struct ActionRequest: Decodable {
 struct LaunchRequest: Decodable {
     var instanceId: UUID?
     var profileId: Profile?
+    /// false: prepare the instance and install only (the frontend starts the app in its own window).
+    var launch: Bool?
 }
 
 struct DeleteArtifactRequest: Decodable {

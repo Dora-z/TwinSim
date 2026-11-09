@@ -13,6 +13,10 @@ final class ScreenCanvasNSView: NSView {
     var contentSize: CGSize? { didSet { needsLayout = true } }
     var onTap: ((CGPoint) -> Void)?
     var onSwipe: ((CGPoint, CGPoint, TimeInterval) -> Void)?
+    /// Live touch stream; returns true when handled (then tap/swipe on release is skipped).
+    var onTouch: ((ScrcpyControl.TouchAction, CGPoint) -> Bool)?
+    var onScroll: ((CGPoint, Double, Double) -> Void)?
+    private var liveTracking = false
     private var downPoint: CGPoint?
     private var downTime = Date()
     private let marker = CAShapeLayer()
@@ -62,9 +66,35 @@ final class ScreenCanvasNSView: NSView {
         window?.makeFirstResponder(self)
         downPoint = normalized(event)
         downTime = Date()
+        if let p = downPoint, onTouch?(.down, p) == true { liveTracking = true; flash(at: event) }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard liveTracking, let p = clampedNormalized(event) else { return }
+        _ = onTouch?(.move, p)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        guard let p = normalized(event) else { return }
+        let factor = event.hasPreciseScrollingDeltas ? 0.08 : 1.0
+        let dx = Double(event.scrollingDeltaX) * factor, dy = Double(event.scrollingDeltaY) * factor
+        if dx != 0 || dy != 0 { onScroll?(p, dx, dy) }
+    }
+
+    private func clampedNormalized(_ event: NSEvent) -> CGPoint? {
+        let p = convert(event.locationInWindow, from: nil)
+        let rect = pictureRect
+        guard rect.width > 0, rect.height > 0 else { return nil }
+        return CGPoint(x: min(max((p.x - rect.minX) / rect.width, 0), 1), y: min(max((p.y - rect.minY) / rect.height, 0), 1))
     }
 
     override func mouseUp(with event: NSEvent) {
+        if liveTracking {
+            liveTracking = false
+            downPoint = nil
+            if let p = clampedNormalized(event) { _ = onTouch?(.up, p) }
+            return
+        }
         defer { downPoint = nil }
         guard let start = downPoint, let end = normalized(event) else { return }
         let rect = pictureRect
@@ -103,9 +133,17 @@ struct ScreenCanvas: NSViewRepresentable {
         if interactive {
             view.onTap = { [weak session] p in session?.tap(normalized: p) }
             view.onSwipe = { [weak session] a, b, t in session?.swipe(from: a, to: b, duration: t) }
+            view.onTouch = { [weak session] action, p in
+                MainActor.assumeIsolated { session?.liveTouch(action, normalized: p) ?? false }
+            }
+            view.onScroll = { [weak session] p, dx, dy in
+                MainActor.assumeIsolated { session?.liveScroll(normalized: p, dx: dx, dy: dy) }
+            }
         } else {
             view.onTap = nil
             view.onSwipe = nil
+            view.onTouch = nil
+            view.onScroll = nil
         }
     }
 }

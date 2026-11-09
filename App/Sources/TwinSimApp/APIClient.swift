@@ -151,8 +151,9 @@ struct APIClient: Sendable {
         try await post("/artifacts/import", json: ["path": path])
     }
 
-    func launch(_ artifact: UUID, instanceId: UUID?, profileId: String?, key: String) async throws -> OperationAccepted {
+    func launch(_ artifact: UUID, instanceId: UUID?, profileId: String?, launch: Bool? = nil, key: String) async throws -> OperationAccepted {
         var body: [String: Any] = [:]
+        if let launch { body["launch"] = launch }
         if let instanceId { body["instanceId"] = instanceId.uuidString }
         if let profileId { body["profileId"] = profileId }
         return try await post("/artifacts/\(artifact.uuidString)/launch", json: body, idempotencyKey: key)

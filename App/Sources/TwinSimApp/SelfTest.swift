@@ -79,6 +79,8 @@ final class SelfTest {
         if platforms.contains("data") { await dataMove() }
         if platforms.contains("windows") { await windowsPlatform() }
         if platforms.contains("library") { await library() }
+        if platforms.contains("appwindow") { await appWindow() }
+        if platforms.contains("perf") { await performance() }
         await snapshotMain("09-devices", select: .devices)
         renderOffscreen(AISettingsView().environment(store), size: CGSize(width: 640, height: 1000), "12-ai-settings")
         check("agent bridge listening", store.agentBridge?.isListening == true, store.agentBridge?.path ?? "")
@@ -103,7 +105,7 @@ final class SelfTest {
         await snapshotMain("02-apps", select: .apps)
 
         var t = Date()
-        await store.open(apk)
+        await store.open(apk, forceDeviceView: true)
         let workspace = store.instances.first { $0.isAppWorkspace && $0.isAndroid }
         guard let ws = workspace, check("Android launch (open-app)", ws.isReady,
                                         "profile \(ws.profileId), \(String(format: "%.1f", Date().timeIntervalSince(t)))s") else {
@@ -146,7 +148,7 @@ final class SelfTest {
         _ = await waitUntil(30) { session.pendingInputs == 0 }
         let count = store.instances.count
         t = Date()
-        await store.open(apk)
+        await store.open(apk, forceDeviceView: true)
         let reopened = store.instances.first { $0.isAppWorkspace && $0.isAndroid }
         check("reopen reuses instance", reopened?.id == ws.id && store.instances.count == count,
               String(format: "%.1fs", Date().timeIntervalSince(t)))
@@ -258,6 +260,174 @@ final class SelfTest {
             check("iOS stop", false, error.localizedDescription)
         }
         closeWindows()
+    }
+
+    // MARK: Android performance (cores, hardware decode, fast input, frame rates)
+
+    private func performance() async {
+        log("== Android performance ==")
+        if let display = store.component("android-display"), !display.isReady { await store.installComponent(display, accepting: []) }
+        guard let apk = await store.importFiles([samples.appendingPathComponent("TouchProbe.apk")]).first else { check("import APK", false); return }
+        var t = Date()
+        await store.open(apk, forceDeviceView: true)
+        guard let ws = store.instances.first(where: { $0.isAppWorkspace && $0.isAndroid }), ws.isReady else {
+            check("open APK (device view)", false, store.notices.last?.message ?? ""); return
+        }
+        check("open APK (device view)", true, String(format: "%.1fs incl. first boot", Date().timeIntervalSince(t)))
+        if let op = try? await store.perform(ws.id, "shell", body: ["argv": ["sh", "-c", "grep -c ^processor /proc/cpuinfo; head -1 /proc/meminfo"]], timeout: 60) {
+            let out = (op.result?["stdout"] ?? "").split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            let cores = Int(out.first ?? "") ?? 0
+            check("emulator CPU cores / RAM", cores >= 4, "cores \(cores), \(out.dropFirst().first ?? "")")
+        }
+        guard await waitUntil(15, { store.screenSession(ws.id) != nil }), let session = store.screenSession(ws.id) else {
+            check("device window", false); return
+        }
+        _ = await waitUntil(30) { session.source == .video && session.stats.decodedFrames > 0 && session.hardwareDecoding != nil }
+        check("device view: hardware decoding", session.hardwareDecoding == true, "\(session.hardwareDecoding.map { $0 ? "hardware" : "software" } ?? "unknown")")
+        _ = await waitUntil(20) { session.liveInput }
+        check("device view: fast input channel", session.liveInput, "\(session.control?.phase ?? .closed)")
+        guard let size = session.guestSize else { return }
+
+        // 10 taps through the control channel vs 3 through adb (old path).
+        _ = try? await store.perform(ws.id, "shell", body: ["argv": ["logcat", "-c"]], timeout: 30)
+        var expected: [CGPoint] = []
+        t = Date()
+        for i in 0..<10 {
+            let p = CGPoint(x: 0.15 + 0.07 * Double(i), y: 0.35 + 0.04 * Double(i))
+            if let g = session.guestPoint(normalized: p) { expected.append(g) }
+            session.tap(normalized: p)
+            try? await Task.sleep(for: .milliseconds(80))
+        }
+        let sendTime = Date().timeIntervalSince(t)
+        _ = await waitUntil(10) { false }   // give the app time to log
+        let taps = await touchLog(ws.id)
+        let matched = expected.count == 10 && taps.count >= 10 && zip(expected, taps.suffix(10)).allSatisfy { abs($0.x - $1.x) <= 2 && abs($0.y - $1.y) <= 2 }
+        check("10 fast taps land exactly", matched, String(format: "sent in %.2fs, app saw %d taps", sendTime, taps.count))
+        t = Date()
+        for i in 0..<3 {
+            let g = CGPoint(x: Int(size.width * 0.5), y: Int(size.height * (0.4 + 0.1 * Double(i))))
+            _ = try? await store.perform(ws.id, "tap", body: ["x": Int(g.x), "y": Int(g.y)], timeout: 60)
+        }
+        let adbPerTap = Date().timeIntervalSince(t) / 3
+        check("adb tap path (comparison)", true, String(format: "%.0f ms per tap via adb vs ~40 ms (finger hold) via control", adbPerTap * 1000))
+
+        // Live drag in the device view: continuous move events, frame rate.
+        var before = session.stats.decodedFrames
+        var start = Date()
+        _ = session.liveTouch(.down, normalized: CGPoint(x: 0.2, y: 0.3))
+        for i in 0..<90 {
+            _ = session.liveTouch(.move, normalized: CGPoint(x: 0.2 + 0.6 * Double(i) / 90, y: 0.3 + 0.4 * Double(i) / 90))
+            try? await Task.sleep(for: .milliseconds(16))
+        }
+        _ = session.liveTouch(.up, normalized: CGPoint(x: 0.8, y: 0.7))
+        try? await Task.sleep(for: .milliseconds(200))
+        var rate = Double(session.stats.decodedFrames - before) / Date().timeIntervalSince(start)
+        check("device view frame rate during drag", rate >= 25, String(format: "%.0f fps (%@)", rate, fmt(session.contentSize)))
+        for window in NSApp.windows where window.title.contains("TouchProbe") || window.title.contains("应用工作区") { window.close() }
+        try? await Task.sleep(for: .seconds(2))
+
+        // App window frame rate at the default density (balanced) and at Retina density.
+        for density in [AppWindowSession.density] {
+            t = Date()
+            await store.open(apk)
+            guard await waitUntil(20, { store.appWindow(apk.id)?.frames ?? 0 > 0 }), let app = store.appWindow(apk.id), let frame = app.frameSize else {
+                check("app window", false); return
+            }
+            _ = await waitUntil(5) { app.hardwareDecoding != nil }
+            check("app window: hardware decoding", app.hardwareDecoding == true, String(format: "first frame %.1fs", Date().timeIntervalSince(t)))
+            before = app.frames
+            start = Date()
+            app.touch(.down, at: CGPoint(x: frame.width * 0.2, y: frame.height * 0.3))
+            for i in 0..<90 {
+                app.touch(.move, at: CGPoint(x: frame.width * (0.2 + 0.6 * Double(i) / 90), y: frame.height * (0.3 + 0.4 * Double(i) / 90)))
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+            app.touch(.up, at: CGPoint(x: frame.width * 0.8, y: frame.height * 0.7))
+            try? await Task.sleep(for: .milliseconds(200))
+            rate = Double(app.frames - before) / Date().timeIntervalSince(start)
+            check("app window frame rate during drag", rate >= 30, String(format: "%.0f fps at density %.1f (%@)", rate, density, fmt(frame)))
+            for window in NSApp.windows where window.title.contains("TouchProbe") { window.close() }
+            try? await Task.sleep(for: .seconds(2))
+        }
+        _ = try? await store.perform(ws.id, "stop", timeout: 180)
+    }
+
+    // MARK: Android app windows (virtual display, scrcpy control)
+
+    private func appWindow() async {
+        log("== Android app window ==")
+        if let display = store.component("android-display"), !display.isReady { await store.installComponent(display, accepting: []) }
+        guard let apk = await store.importFiles([samples.appendingPathComponent("TouchProbe.apk")]).first else {
+            check("import APK", false); return
+        }
+        var t = Date()
+        await store.open(apk)
+        guard let ws = store.instances.first(where: { $0.isAppWorkspace && $0.isAndroid }), ws.isReady else {
+            check("open APK in app window", false, store.notices.last?.message ?? ""); return
+        }
+        guard await waitUntil(15, { store.appWindow(apk.id) != nil }), let session = store.appWindow(apk.id) else {
+            check("app window opened", false, "windows: " + NSApp.windows.map { "\($0.title)|\($0.identifier?.rawValue ?? "-")|\($0.isVisible)" }.joined(separator: "; ")
+                  + " notices: " + store.notices.map(\.message).joined(separator: " / "))
+            return
+        }
+        let running = await waitUntil(30) { session.phase == .running && session.frames > 0 }
+        check("app window shows only the app (virtual display)", running,
+              String(format: "%.1fs to first frame, phase \(session.phase)", Date().timeIntervalSince(t)))
+        guard running, let size = session.frameSize else { return }
+        check("display = window pixels (1 dp = 1 pt, no downscale)",
+              abs(size.width - session.requestedSize.width) <= 2 && abs(size.height - session.requestedSize.height) <= 2,
+              "frame \(fmt(size)), requested \(fmt(session.requestedSize))")
+        try? await Task.sleep(for: .seconds(2))
+        if let buffer = session.lastFrame {
+            let image = CIImage(cvPixelBuffer: buffer)
+            if let cg = CIContext().createCGImage(image, from: image.extent) { savePNG(cg, "30-app-window") }
+        }
+        // Touch through the control channel; the app logs coordinates on its own display.
+        _ = try? await store.perform(ws.id, "shell", body: ["argv": ["logcat", "-c"]], timeout: 30)
+        let center = CGPoint(x: (size.width / 2).rounded(), y: (size.height * 0.6).rounded())
+        t = Date()
+        session.touch(.down, at: center)
+        try? await Task.sleep(for: .milliseconds(60))
+        session.touch(.up, at: center)
+        try? await Task.sleep(for: .seconds(1.5))
+        let taps = await touchLog(ws.id)
+        check("touch lands at window coordinates", taps.last.map { abs($0.x - center.x) <= 2 && abs($0.y - center.y) <= 2 } ?? false,
+              "sent \(fmt(center)), app saw \(taps.suffix(1).map(fmt))")
+        // Continuous drag: frames keep up (interactive frame rate).
+        let before = session.frames
+        let start = Date()
+        session.touch(.down, at: CGPoint(x: size.width * 0.2, y: size.height * 0.3))
+        for i in 0..<60 {
+            session.touch(.move, at: CGPoint(x: size.width * (0.2 + 0.6 * Double(i) / 60), y: size.height * (0.3 + 0.4 * Double(i) / 60)))
+            try? await Task.sleep(for: .milliseconds(16))
+        }
+        session.touch(.up, at: CGPoint(x: size.width * 0.8, y: size.height * 0.7))
+        try? await Task.sleep(for: .milliseconds(300))
+        let rate = Double(session.frames - before) / Date().timeIntervalSince(start)
+        check("interactive frame rate during drag", rate >= 20, String(format: "%.0f fps at density %.1f", rate, AppWindowSession.density))
+        // Resize: the virtual display follows the window and the app reflows.
+        var sizes: [String] = []
+        var resized = false
+        for target in [CGSize(width: 700, height: 1000), CGSize(width: 1100, height: 1300)] {
+            session.resize(pixels: target)
+            let ok = await waitUntil(8) { session.frameSize.map { abs($0.width - target.width) <= 2 && abs($0.height - target.height) <= 2 } ?? false }
+            sizes.append("\(fmt(target))->\(fmt(session.frameSize))")
+            resized = resized || ok
+        }
+        check("resize window -> display resized", resized, sizes.joined(separator: ", "))
+        if let buffer = session.lastFrame {
+            let image = CIImage(cvPixelBuffer: buffer)
+            if let cg = CIContext().createCGImage(image, from: image.extent) { savePNG(cg, "31-app-window-resized") }
+        }
+        // Close and reopen: a new display, the app starts again.
+        for window in NSApp.windows where window.title.contains("TouchProbe") { window.close() }
+        try? await Task.sleep(for: .seconds(2))
+        t = Date()
+        await store.open(apk)
+        let again = await waitUntil(30) { (store.appWindow(apk.id).map { $0 !== session && $0.frames > 0 }) ?? false }
+        check("close + reopen app window", again, String(format: "%.1fs", Date().timeIntervalSince(t)))
+        for window in NSApp.windows where window.title.contains("TouchProbe") { window.close() }
+        _ = try? await store.perform(ws.id, "stop", timeout: 180)
     }
 
     // MARK: App library deletion + D3DMetal consent
@@ -655,7 +825,9 @@ final class SelfTest {
         log("Self-test finished: \(passed)/\(checks.count) passed")
         if ProcessInfo.processInfo.environment["TWINSIM_SELF_TEST_KEEP_OPEN"] == nil {
             Task {
-                try? await Task.sleep(for: .seconds(3))
+                // Stop what the test started so quitting never waits on the "devices running" prompt.
+                await store.stopAllRunning(timeout: 180)
+                try? await Task.sleep(for: .seconds(2))
                 NSApp.terminate(nil)
             }
         }

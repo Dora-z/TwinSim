@@ -33,6 +33,15 @@ struct TwinSimApp: App {
         .defaultSize(width: 420, height: 860)
         .windowToolbarStyle(.unifiedCompact)
 
+        WindowGroup("应用", id: "app", for: AppWindowTarget.self) { $target in
+            if let target {
+                AppWindowView(target: target)
+                    .environment(delegate.store)
+            }
+        }
+        .defaultSize(width: 412, height: 860)
+        .windowToolbarStyle(.unifiedCompact(showsTitle: true))
+
         Settings {
             TabView {
                 SettingsView().tabItem { Label("通用", systemImage: "gearshape") }

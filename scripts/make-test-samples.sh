@@ -65,8 +65,15 @@ public class MainActivity extends Activity {
         int count;
         Probe(Context c) { super(c); }
 
+        float[] finger;
+
         @Override public boolean onTouchEvent(MotionEvent e) {
+            if (e.getAction() == MotionEvent.ACTION_DOWN || e.getAction() == MotionEvent.ACTION_MOVE) {
+                finger = new float[] { e.getX(), e.getY() };   // follow the finger while dragging
+                invalidate();
+            }
             if (e.getAction() == MotionEvent.ACTION_UP) {
+                finger = null;
                 int[] loc = new int[2];
                 getLocationOnScreen(loc);
                 float x = e.getRawX(), y = e.getRawY();
@@ -93,6 +100,10 @@ public class MainActivity extends Activity {
             canvas.drawText("TwinSim TouchProbe", 40, 120, paint);
             paint.setTextSize(40);
             canvas.drawText("taps: " + count, 40, 190, paint);
+            if (finger != null) {
+                paint.setColor(Color.rgb(120, 255, 140));
+                canvas.drawCircle(finger[0], finger[1], 36, paint);
+            }
             for (int i = 0; i < taps.size(); i++) {
                 float[] t = taps.get(i);
                 paint.setColor(i == taps.size() - 1 ? Color.rgb(255, 196, 0) : Color.rgb(90, 200, 250));
