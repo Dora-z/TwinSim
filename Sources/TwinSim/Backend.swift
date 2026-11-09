@@ -221,7 +221,7 @@ actor Backend {
         } else {
             writableSystem = .unsupported
         }
-        return InstanceView(device, capabilities: [
+        var view = InstanceView(device, capabilities: [
             "installApk": isAndroid ? online : .unsupported,
             "installSimulatorApp": device.engineId == .simulator ? online : .unsupported,
             "installDeviceIpa": device.engineId == .vphone ? online : .unsupported,
@@ -237,6 +237,14 @@ actor Backend {
             "liveVideo": isAndroid ? (androidVideo.installed ? online : .blocked("ANDROID_DISPLAY_MISSING")) : .unsupported,
             "frida": .unsupported,
         ])
+        if isAndroid {
+            let hw = android.hardware(device)
+            let key = "\(hw.cpus)/\(hw.ramMB)"
+            view.hardware = HardwareView(cpus: hw.cpus, ramMB: hw.ramMB, custom: device.cpus != nil || device.ramMB != nil,
+                                         pending: device.appliedHardware != nil && device.appliedHardware != key,
+                                         maxCpus: Android.maxCpus, maxRamMB: Android.maxRamMB)
+        }
+        return view
     }
 
     private func refresh(_ id: UUID) async throws -> Device {
@@ -299,8 +307,12 @@ actor Backend {
                 throw BackendError("INVALID_INSTANCE", "The external VM must be unregistered and use the vphone engine.")
             }
         }
-        let device = Device(id: UUID(), name: name, profileId: request.profileId, engineId: request.engineId,
+        var device = Device(id: UUID(), name: name, profileId: request.profileId, engineId: request.engineId,
                             purpose: "device", externalName: request.externalName, state: "creating")
+        if request.engineId == .android {
+            device.cpus = try Self.validCpus(request.cpus)
+            device.ramMB = try Self.validRam(request.ramMB)
+        }
         return try enqueue("create", resource: resource(device.id), key: key, fingerprint: fingerprint, instance: device.id,
                            newDevice: device) { backend, _ in
             _ = try await backend.prepare(device.id)
@@ -400,7 +412,7 @@ actor Backend {
         let device = try device(id)
         guard ["start", "stop", "delete", "install", "launch", "root", "writable-system", "snapshot-save",
                "snapshot-load", "tap", "key", "text", "shell", "uninstall", "guest-push", "forward", "unforward",
-               "wine-tool", "dxvk", "display"].contains(action) else {
+               "wine-tool", "dxvk", "display", "hardware"].contains(action) else {
             throw BackendError("ACTION_NOT_FOUND", "No such instance action.")
         }
         if action == "install" {
@@ -421,6 +433,8 @@ actor Backend {
             try await stop(id)
         case "delete":
             return try await delete(id)
+        case "hardware":
+            return try await setHardware(id, request)
         case "install":
             guard let artifactId = request.artifactId else { throw BackendError("INVALID_ARTIFACT", "Specify an artifactId.") }
             try await install(id, artifact(artifactId))
@@ -447,6 +461,8 @@ actor Backend {
         case .android:
             driverID = try await android.create(device)
             device.hardwareTuning = Android.tuningLevel
+            let hw = android.hardware(device)
+            device.appliedHardware = "\(hw.cpus)/\(hw.ramMB)"
         case .simulator: driverID = try await simulator.create(device)
         case .vphone: driverID = try await vphone.create(device, externalName: device.externalName)
         case .windows: driverID = try await windows.create(device)
@@ -464,12 +480,13 @@ actor Backend {
         try put(device)
         switch device.engineId {
         case .android:
-            if device.hardwareTuning != Android.tuningLevel {
-                // Older devices used 2 cores / 2 GB; give them room for the software video encoder.
-                if (try? await android.tune(driver)) != nil {
-                    device.hardwareTuning = Android.tuningLevel
-                    try put(device)
-                }
+            // Apply the desired CPU/RAM (own values or the default) while the device is stopped.
+            let hw = android.hardware(device)
+            let key = "\(hw.cpus)/\(hw.ramMB)"
+            if device.appliedHardware != key, (try? await android.tune(driver, cpus: hw.cpus, ramMB: hw.ramMB)) != nil {
+                device.hardwareTuning = Android.tuningLevel
+                device.appliedHardware = key
+                try put(device)
             }
             try await android.start(driver)
             let uid = try? await android.adb(driver, ["shell", "id", "-u"])
@@ -757,6 +774,46 @@ actor Backend {
             throw BackendError("CAPABILITY_UNSUPPORTED", "The instance does not support this action.")
         }
         return ["instanceId": id.uuidString]
+    }
+
+    static func validCpus(_ value: Int?) throws -> Int? {
+        guard let value else { return nil }
+        guard (1...Android.maxCpus).contains(value) else {
+            throw BackendError("INVALID_HARDWARE", "CPU cores must be between 1 and \(Android.maxCpus).")
+        }
+        return value
+    }
+
+    static func validRam(_ value: Int?) throws -> Int? {
+        guard let value else { return nil }
+        guard (1024...Android.maxRamMB).contains(value) else {
+            throw BackendError("INVALID_HARDWARE", "RAM must be between 1024 and \(Android.maxRamMB) MB.")
+        }
+        return value
+    }
+
+    /// Sets an Android device's own CPU/RAM (or returns it to the default). A stopped device is
+    /// changed at once; a running one on its next start.
+    private func setHardware(_ id: UUID, _ request: ActionRequest) async throws -> [String: String] {
+        var device = try device(id)
+        guard device.engineId == .android else { throw BackendError("CAPABILITY_UNSUPPORTED", "Hardware settings apply to Android devices.") }
+        if request.useDefault == true {
+            device.cpus = nil
+            device.ramMB = nil
+        } else {
+            guard request.cpus != nil || request.ramMB != nil else { throw BackendError("INVALID_HARDWARE", "Specify cpus and/or ramMB.") }
+            if let cpus = try Self.validCpus(request.cpus) { device.cpus = cpus }
+            if let ram = try Self.validRam(request.ramMB) { device.ramMB = ram }
+        }
+        let hw = android.hardware(device)
+        var applied = "next-start"
+        if device.state == "stopped", let driver = device.driverID {
+            try await android.tune(driver, cpus: hw.cpus, ramMB: hw.ramMB)
+            device.appliedHardware = "\(hw.cpus)/\(hw.ramMB)"
+            applied = "now"
+        }
+        try put(device)
+        return ["cpus": String(hw.cpus), "ramMB": String(hw.ramMB), "applied": applied]
     }
 
     private static func absolutePath(_ path: String?) throws -> String {

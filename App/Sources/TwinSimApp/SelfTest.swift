@@ -81,8 +81,10 @@ final class SelfTest {
         if platforms.contains("library") { await library() }
         if platforms.contains("appwindow") { await appWindow() }
         if platforms.contains("perf") { await performance() }
+        if platforms.contains("hardware") { await hardware() }
         await snapshotMain("09-devices", select: .devices)
         renderOffscreen(AISettingsView().environment(store), size: CGSize(width: 640, height: 1000), "12-ai-settings")
+        renderOffscreen(SettingsView().environment(store), size: CGSize(width: 560, height: 1300), "13-settings")
         check("agent bridge listening", store.agentBridge?.isListening == true, store.agentBridge?.path ?? "")
         finish()
     }
@@ -260,6 +262,88 @@ final class SelfTest {
             check("iOS stop", false, error.localizedDescription)
         }
         closeWindows()
+    }
+
+    // MARK: Android hardware settings (CPU cores / RAM)
+
+    private func guestHardware(_ id: UUID) async -> (Int, Int) {
+        guard let op = try? await store.perform(id, "shell", body: ["argv": ["sh", "-c", "grep -c ^processor /proc/cpuinfo; grep MemTotal /proc/meminfo"]], timeout: 60)
+        else { return (0, 0) }
+        let lines = (op.result?["stdout"] ?? "").split(separator: "\n")
+        let cores = Int(lines.first?.trimmingCharacters(in: .whitespaces) ?? "") ?? 0
+        let kb = lines.dropFirst().first.flatMap { Int($0.split(whereSeparator: { !$0.isNumber }).joined()) } ?? 0
+        return (cores, kb / 1024)
+    }
+
+    /// MemTotal is a little below the configured size (kernel reservations); the emulator raises
+    /// RAM below the image minimum (measured 2560 MB for API 34).
+    private func ramMatches(_ guestMB: Int, _ configured: Int) -> Bool {
+        let effective = max(configured, 2560)
+        return guestMB > effective - 640 && guestMB <= effective
+    }
+
+    private func hardware() async {
+        log("== Android hardware settings ==")
+        var t = Date()
+        guard let id = await store.createInstance(engineId: "android-emulator", profileId: "android-google-apis",
+                                                  name: "HW Test", externalName: nil, cpus: 3, ramMB: 2048) else {
+            check("create with 3 cores / 2 GB", false, store.notices.last?.message ?? ""); return
+        }
+        await store.refreshInstance(id)
+        check("create with 3 cores / 2 GB", store.instance(id)?.hardware.map { $0.cpus == 3 && $0.ramMB == 2048 && $0.custom } ?? false,
+              String(format: "%.1fs", Date().timeIntervalSince(t)))
+        await store.run(id, "start")
+        var (cores, ram) = await guestHardware(id)
+        check("guest sees 3 cores / ~2 GB", cores == 3 && ramMatches(ram, 2048), "cores \(cores), MemTotal \(ram) MB")
+
+        // Change while running: stored, applied on next start.
+        let op = await store.run(id, "hardware", body: ["cpus": 4, "ramMB": 3072])
+        await store.refreshInstance(id)
+        check("change while running is pending", op?.result?["applied"] == "next-start" && store.instance(id)?.hardware?.pending == true)
+        t = Date()
+        await store.run(id, "stop")
+        await store.run(id, "start")
+        (cores, ram) = await guestHardware(id)
+        await store.refreshInstance(id)
+        check("after restart guest sees 4 cores / ~3 GB", cores == 4 && ramMatches(ram, 3072) && store.instance(id)?.hardware?.pending == false,
+              String(format: "cores \(cores), MemTotal \(ram) MB, restart %.1fs", Date().timeIntervalSince(t)))
+
+        // Stopped device: the CLI (same path as MCP) changes it immediately.
+        await store.run(id, "stop")
+        let cli = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/twinsim")
+        let out = await Task.detached { () -> String in
+            let p = Process(); p.executableURL = cli
+            p.arguments = ["set_device_hardware", "--device", id.uuidString, "--cpus", "2", "--ramMB", "2048"]
+            var e = ProcessInfo.processInfo.environment; e["TWINSIM_NO_LAUNCH"] = "1"; p.environment = e
+            let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
+            try? p.run(); p.waitUntilExit()
+            return String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        }.value
+        check("CLI/MCP set_device_hardware on stopped device", out.contains("applied."), out.trimmingCharacters(in: .whitespacesAndNewlines))
+        await store.run(id, "start")
+        (cores, ram) = await guestHardware(id)
+        check("guest sees 2 cores / ~2 GB", cores == 2 && ramMatches(ram, 2048), "cores \(cores), MemTotal \(ram) MB")
+
+        // Back to the default (automatic unless Settings say otherwise).
+        await store.run(id, "stop")
+        await store.run(id, "hardware", body: ["useDefault": true])
+        await store.refreshInstance(id)
+        let hw = store.instance(id)?.hardware
+        await store.run(id, "start")
+        (cores, ram) = await guestHardware(id)
+        check("restore default", hw?.custom == false && cores == hw?.cpus && ramMatches(ram, hw?.ramMB ?? 0),
+              "default \(hw?.cpus ?? 0) cores / \(hw?.ramMB ?? 0) MB, guest \(cores) / \(ram) MB")
+
+        // Out of range is rejected with a clear code.
+        do {
+            _ = try await store.perform(id, "hardware", body: ["cpus": 999], timeout: 60)
+            check("reject out-of-range cores", false, "accepted")
+        } catch let failure as OperationFailure {
+            check("reject out-of-range cores", failure.body.code == "INVALID_HARDWARE", failure.body.message)
+        } catch {
+            check("reject out-of-range cores", (error as? APIError)?.code == "INVALID_HARDWARE", error.localizedDescription)
+        }
+        _ = await store.deleteInstance(id)
     }
 
     // MARK: Android performance (cores, hardware decode, fast input, frame rates)

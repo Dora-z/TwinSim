@@ -168,6 +168,7 @@ final class Agent {
             .mapValues { $0["reasonCode"] as? String ?? "blocked" }
         if !blocked.isEmpty { out["blocked"] = blocked }
         if let uid = d["guestUid"] { out["guestUid"] = uid }
+        if let hw = d["hardware"] as? [String: Any] { out["hardware"] = ["cpus": hw["cpus"] ?? 0, "ramMB": hw["ramMB"] ?? 0, "pending": hw["pending"] ?? false] }
         if let selinux = d["selinux"] { out["selinux"] = selinux }
         return out
     }
@@ -366,12 +367,17 @@ final class Agent {
                       properties: ["profileId": prop("string", "Device profile.", enum: ["android-aosp", "android-research", "android-magisk", "android-google-apis", "ios-development", "ios-research", "windows-desktop", "windows-d3dmetal"]),
                                    "name": prop("string", "Display name."),
                                    "start": prop("boolean", "Boot after creating (default true)."),
+                                   "cpus": prop("integer", "Android: CPU cores (default from TwinSim Settings)."),
+                                   "ramMB": prop("integer", "Android: RAM in MB (default from TwinSim Settings)."),
                                    "showWindow": prop("boolean", "Open the device window in the TwinSim UI (default false).")],
                       required: ["profileId", "name"]) { [unowned self] a in
             let profile = try a.require("profileId")
             let engine = profile.hasPrefix("android") ? "android-emulator" : profile == "ios-development" ? "ios-simulator"
                 : profile.hasPrefix("windows") ? "windows-wine" : "ios-vphone"
-            let op = try operation("/instances", body: ["engineId": engine, "profileId": profile, "name": try a.require("name")], wait: cap(600))
+            var body: [String: Any] = ["engineId": engine, "profileId": profile, "name": try a.require("name")]
+            if let cpus = a.int("cpus") { body["cpus"] = cpus }
+            if let ram = a.int("ramMB") { body["ramMB"] = ram }
+            let op = try operation("/instances", body: body, wait: cap(600))
             if let p = pending(op) { return p }
             let id = (op["result"] as? [String: String])?["instanceId"] ?? (op["instanceId"] as? String ?? "")
             if a.bool("start") ?? true {
@@ -402,6 +408,20 @@ final class Agent {
             return .text(detail == "unregistered"
                 ? "Removed \(d["name"] ?? "") from TwinSim (the vphone VM files were kept)."
                 : "Deleted \(d["name"] ?? "") (\(Self.id(d))) and its data.")
+        })
+
+        t.append(Tool(name: "set_device_hardware", description: "Android: set a device's CPU cores and/or RAM (MB), or useDefault=true to follow TwinSim's default. A stopped device changes immediately; a running one on its next start (stop_device + start_device to apply now).",
+                      properties: ["device": deviceProp, "cpus": prop("integer", "CPU cores."), "ramMB": prop("integer", "RAM in MB (>= 1024)."),
+                                   "useDefault": prop("boolean", "Return to the default from Settings.")],
+                      required: ["device"]) { [unowned self] a in
+            let d = try device(try a.require("device"))
+            var body: [String: Any] = [:]
+            if let cpus = a.int("cpus") { body["cpus"] = cpus }
+            if let ram = a.int("ramMB") { body["ramMB"] = ram }
+            if a.bool("useDefault") == true { body["useDefault"] = true }
+            let op = try action(Self.id(d), "hardware", body, wait: cap(120))
+            let r = op["result"] as? [String: String] ?? [:]
+            return .text("\(r["cpus"] ?? "?") cores, \(r["ramMB"] ?? "?") MB — " + (r["applied"] == "now" ? "applied." : "applies on the next start."))
         })
 
         t.append(Tool(name: "show_device", description: "Open the device's live screen window in the TwinSim app so the user can watch.",

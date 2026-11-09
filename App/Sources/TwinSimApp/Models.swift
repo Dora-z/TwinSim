@@ -44,8 +44,18 @@ struct Instance: Decodable, Identifiable, Sendable, Hashable {
     var guestUid: Int?
     var selinux: String?
     var capabilities: [String: Capability]
+    var hardware: Hardware?
 
-    enum CodingKeys: String, CodingKey { case id, name, profileId, engineId, purpose, state, guestUid, selinux, capabilities }
+    struct Hardware: Decodable, Sendable, Hashable {
+        var cpus: Int
+        var ramMB: Int
+        var custom: Bool
+        var pending: Bool
+        var maxCpus: Int
+        var maxRamMB: Int
+    }
+
+    enum CodingKeys: String, CodingKey { case id, name, profileId, engineId, purpose, state, guestUid, selinux, capabilities, hardware }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
@@ -57,6 +67,7 @@ struct Instance: Decodable, Identifiable, Sendable, Hashable {
         guestUid = try? c.decode(Int.self, forKey: .guestUid)
         selinux = try? c.decode(String.self, forKey: .selinux)
         capabilities = (try? c.decode([String: Capability].self, forKey: .capabilities)) ?? [:]
+        hardware = try? c.decode(Hardware.self, forKey: .hardware)
     }
 
     var isAndroid: Bool { engineId == "android-emulator" }

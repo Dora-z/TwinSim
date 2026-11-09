@@ -131,7 +131,7 @@ struct Android: Sendable {
            let id = existing["id"] as? String { return id }
         let result = try await cli(["device", "create", device.driverName, "--image", device.profileId.image,
                                     "--profile", "agent-lean", "--root", device.profileId.rootMode,
-                                    "--cpus", String(Self.cpus), "--ram", String(Self.ramMB)], timeout: 300)
+                                    "--cpus", String(hardware(device).cpus), "--ram", String(hardware(device).ramMB)], timeout: 300)
         guard let id = (result as? [String: Any])?["id"] as? String else {
             throw BackendError("INVALID_TOOL_RESPONSE", "Jidr did not return a device identifier.")
         }
@@ -184,15 +184,32 @@ struct Android: Sendable {
         guard output.text.contains("Status: ok") else { throw BackendError("APP_LAUNCH_FAILED", output.text) }
     }
 
-    /// Emulator resources. The guest's video encoder is software-only, so it needs cores of its own:
-    /// half the host's cores (2...6) and 3 GB (4 GB on hosts with 32 GB or more).
+    /// Emulator resources. The guest's video encoder is software-only, so it needs cores of its own.
+    /// Automatic: half the host's cores (2...6) and 3 GB (4 GB on hosts with 32 GB or more).
     static let tuningLevel = 1
-    static var cpus: Int { min(6, max(2, ProcessInfo.processInfo.activeProcessorCount / 2)) }
-    static var ramMB: Int { ProcessInfo.processInfo.physicalMemory >= 32 << 30 ? 4096 : 3072 }
+    static var autoCpus: Int { min(6, max(2, ProcessInfo.processInfo.activeProcessorCount / 2)) }
+    static var autoRamMB: Int { ProcessInfo.processInfo.physicalMemory >= 32 << 30 ? 4096 : 3072 }
+    static var maxCpus: Int { max(1, ProcessInfo.processInfo.activeProcessorCount) }
+    /// Leave at least 4 GB to macOS.
+    static var maxRamMB: Int { max(2048, Int(ProcessInfo.processInfo.physicalMemory >> 20) - 4096) }
 
-    /// Applies the current CPU/RAM settings to a stopped device created earlier.
-    func tune(_ id: String) async throws {
-        _ = try await cli(["device", "edit", id, "--cpus", String(Self.cpus), "--ram", String(Self.ramMB)], timeout: 60)
+    /// Default for devices without their own values: Settings (TWINSIM_ANDROID_CPUS / _RAM_MB) or automatic.
+    var defaultCpus: Int {
+        Int(config.environment["TWINSIM_ANDROID_CPUS"] ?? "").flatMap { $0 > 0 ? min($0, Self.maxCpus) : nil } ?? Self.autoCpus
+    }
+    var defaultRamMB: Int {
+        Int(config.environment["TWINSIM_ANDROID_RAM_MB"] ?? "").flatMap { $0 > 0 ? min(max($0, 1024), Self.maxRamMB) : nil } ?? Self.autoRamMB
+    }
+    var cpus: Int { defaultCpus }
+    var ramMB: Int { defaultRamMB }
+
+    func hardware(_ device: Device) -> (cpus: Int, ramMB: Int) {
+        (device.cpus ?? defaultCpus, device.ramMB ?? defaultRamMB)
+    }
+
+    /// Writes CPU/RAM to a stopped device.
+    func tune(_ id: String, cpus: Int, ramMB: Int) async throws {
+        _ = try await cli(["device", "edit", id, "--cpus", String(cpus), "--ram", String(ramMB)], timeout: 60)
     }
 
     static func quote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }

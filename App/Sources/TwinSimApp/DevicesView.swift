@@ -132,6 +132,9 @@ struct DeviceDetailView: View {
                               systemImage: "xmark.octagon").foregroundStyle(.red).font(.callout).textSelection(.enabled)
                     }
                     GroupBox("信息") { info(instance).padding(4) }
+                    if instance.hardware != nil {
+                        GroupBox("硬件") { HardwareEditor(instance: instance).padding(4) }
+                    }
                     GroupBox("能力") { CapabilityGrid(instance: instance).padding(4) }
                     GroupBox("应用") { installSection(instance).padding(4) }
                     GroupBox("日志") {
@@ -284,6 +287,9 @@ struct CreateDeviceSheet: View {
     @State private var externalName = ""
     @State private var working = false
     @State private var startAfter = true
+    @State private var customHardware = false
+    @State private var cpus = BackendSettings.load().androidCpus > 0 ? BackendSettings.load().androidCpus : BackendSettings.autoCpus
+    @State private var ramMB = BackendSettings.load().androidRamMB > 0 ? BackendSettings.load().androidRamMB : BackendSettings.autoRamMB
 
     private var engine: EngineInfo? { store.engines.first { $0.engineId == engineId } }
     private var missing: [Component] {
@@ -312,6 +318,17 @@ struct CreateDeviceSheet: View {
             if engineId == "ios-vphone" {
                 TextField("已准备的 VM 名称（可选）", text: $externalName, prompt: Text("vphone 机器库中的名称"))
             }
+            if engineId == "android-emulator" {
+                Toggle("单独设置 CPU 和内存", isOn: $customHardware)
+                if customHardware {
+                    Picker("CPU 核心", selection: $cpus) {
+                        ForEach(1...BackendSettings.hostCpus, id: \.self) { Text("\($0) 核").tag($0) }
+                    }
+                    Picker("内存", selection: $ramMB) {
+                        ForEach(HardwareChoices.ram(max: BackendSettings.maxAndroidRamMB), id: \.self) { Text(HardwareChoices.label($0)).tag($0) }
+                    }
+                }
+            }
             Toggle("创建后启动", isOn: $startAfter)
             if !missing.isEmpty {
                 Section {
@@ -338,8 +355,10 @@ struct CreateDeviceSheet: View {
                     working = true
                     Task {
                         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let custom = customHardware && engineId == "android-emulator"
                         let id = await store.createInstance(engineId: engineId, profileId: profileId, name: trimmed,
-                                                            externalName: externalName.isEmpty ? nil : externalName)
+                                                            externalName: externalName.isEmpty ? nil : externalName,
+                                                            cpus: custom ? cpus : nil, ramMB: custom ? ramMB : nil)
                         working = false
                         if let id {
                             onCreated(id)
@@ -357,6 +376,83 @@ struct CreateDeviceSheet: View {
             if let first = store.engines.first, !store.engines.contains(where: { $0.engineId == engineId }) {
                 engineId = first.engineId; profileId = first.profiles.first ?? ""
             }
+        }
+    }
+}
+
+
+enum HardwareChoices {
+    static func ram(max: Int) -> [Int] {
+        [2048, 2560, 3072, 4096, 6144, 8192, 12288, 16384, 24576, 32768].filter { $0 <= max }
+    }
+    static let note = "低于系统镜像最低要求的内存会被模拟器自动提高（API 34 镜像实测约 2.5 GB）。"
+
+    static func label(_ mb: Int) -> String { mb % 1024 == 0 ? "\(mb / 1024) GB" : String(format: "%.1f GB", Double(mb) / 1024) }
+}
+
+/// Android device hardware (CPU cores, RAM): own values or the default from Settings.
+struct HardwareEditor: View {
+    @Environment(AppStore.self) private var store
+    let instance: Instance
+    @State private var cpus = 0
+    @State private var ramMB = 0
+    @State private var working = false
+    @State private var message: String?
+
+    var body: some View {
+        if let hw = instance.hardware {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 16) {
+                    Label("\(hw.cpus) 核", systemImage: "cpu")
+                    Label(HardwareChoices.label(hw.ramMB), systemImage: "memorychip")
+                    Text(hw.custom ? "本设备单独设置" : "使用默认设置").foregroundStyle(.secondary)
+                    Spacer()
+                }
+                if hw.pending {
+                    Label(instance.isReady ? "设备正在以原配置运行，新配置将在下次启动时生效。" : "下次启动时应用新配置。",
+                          systemImage: "clock.arrow.circlepath").font(.callout).foregroundStyle(.orange)
+                }
+                HStack {
+                    Picker("CPU", selection: $cpus) {
+                        ForEach(1...max(1, hw.maxCpus), id: \.self) { Text("\($0) 核").tag($0) }
+                    }
+                    .frame(maxWidth: 160)
+                    Picker("内存", selection: $ramMB) {
+                        ForEach(HardwareChoices.ram(max: hw.maxRamMB), id: \.self) { Text(HardwareChoices.label($0)).tag($0) }
+                    }
+                    .frame(maxWidth: 180)
+                    Button("保存") { apply(["cpus": cpus, "ramMB": ramMB]) }
+                        .disabled(working || (cpus == hw.cpus && ramMB == hw.ramMB && hw.custom))
+                    if hw.custom { Button("恢复默认") { apply(["useDefault": true]) }.disabled(working) }
+                    if working { ProgressView().controlSize(.small) }
+                }
+                if hw.pending && instance.isReady {
+                    Button("重启设备以应用") {
+                        working = true
+                        Task {
+                            if await store.run(instance.id, "stop") != nil { await store.run(instance.id, "start") }
+                            working = false
+                        }
+                    }
+                    .disabled(working)
+                }
+                if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
+                Text(HardwareChoices.note).font(.caption2).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onAppear { cpus = hw.cpus; ramMB = HardwareChoices.ram(max: hw.maxRamMB).last { $0 <= hw.ramMB } ?? hw.ramMB }
+            .onChange(of: hw) { _, new in cpus = new.cpus; ramMB = HardwareChoices.ram(max: new.maxRamMB).last { $0 <= new.ramMB } ?? new.ramMB }
+        }
+    }
+
+    private func apply(_ body: [String: Any]) {
+        working = true
+        Task {
+            if let op = await store.run(instance.id, "hardware", body: body) {
+                message = op.result?["applied"] == "now" ? "已应用。" : "已保存，将在下次启动时生效。"
+            }
+            await store.refreshInstance(instance.id)
+            working = false
         }
     }
 }

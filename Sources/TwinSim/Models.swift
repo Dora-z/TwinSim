@@ -72,6 +72,11 @@ struct Device: Codable, Sendable {
     var forwardedPorts: [Int]? = nil
     /// Hardware tuning level applied to the engine device (Android: CPU cores and RAM).
     var hardwareTuning: Int? = nil
+    /// Android CPU cores / RAM chosen for this device (nil = the default from Settings).
+    var cpus: Int? = nil
+    var ramMB: Int? = nil
+    /// "cpus/ramMB" last written to the engine; differs from the desired values until applied.
+    var appliedHardware: String? = nil
 
     var driverName: String { "twinsim-" + id.uuidString.lowercased() }
 }
@@ -86,6 +91,7 @@ struct InstanceView: Encodable {
     let guestUid: Int?
     let selinux: String?
     let capabilities: [String: Capability]
+    var hardware: HardwareView? = nil
 
     init(_ device: Device, capabilities: [String: Capability]) {
         id = device.id
@@ -98,6 +104,17 @@ struct InstanceView: Encodable {
         selinux = device.selinux
         self.capabilities = capabilities
     }
+}
+
+struct HardwareView: Encodable {
+    let cpus: Int
+    let ramMB: Int
+    /// Whether these values come from the device itself (false: the default).
+    let custom: Bool
+    /// true when the device runs with different values that apply on its next start.
+    let pending: Bool
+    let maxCpus: Int
+    let maxRamMB: Int
 }
 
 struct Artifact: Codable, Sendable {
@@ -167,6 +184,8 @@ struct CreateRequest: Decodable {
     let profileId: Profile
     let name: String
     let externalName: String?
+    var cpus: Int? = nil
+    var ramMB: Int? = nil
 }
 
 struct ImportRequest: Decodable { let path: String }
@@ -187,6 +206,10 @@ struct ActionRequest: Decodable {
     var remotePath: String?
     var guestPort: Int?
     var localPort: Int?
+    var cpus: Int?
+    var ramMB: Int?
+    /// Clear the device's own values and follow the default again.
+    var useDefault: Bool?
 }
 
 struct LaunchRequest: Decodable {

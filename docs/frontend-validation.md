@@ -93,6 +93,18 @@
 
 未在真实客户端中验证：未在 Claude Code、Claude Desktop、Cursor、VS Code、Codex、Gemini CLI 中实际加载配置，本机未安装这些 CLI。协议层面已由上面的 MCP 客户端测试覆盖。
 
+## Android 模拟器资源自定义（0.4.1）
+
+`TWINSIM_SELF_TEST_PLATFORMS=hardware`：**11/11 通过**，在客体内读取 `/proc/cpuinfo` 和 `MemTotal` 核对。
+
+| 操作 | 客体实际 |
+| --- | --- |
+| 创建时设 3 核、2 GB | 3 核，MemTotal 2478 MB（模拟器把 2 GB 提高到最低 2.5 GB） |
+| 运行中改为 4 核、3 GB | 标记为待生效；重启后为 4 核，2981 MB |
+| 已停机时用 `twinsim set_device_hardware` 改为 2 核、2 GB | 立即写入；启动后为 2 核，2478 MB |
+| 恢复默认（自动） | 6 核，2981 MB |
+| 设为 999 核 | 拒绝，`INVALID_HARDWARE` |
+
 ## Android 应用窗口与性能（0.4.0）
 
 本节两次运行均使用独立的 `TWINSIM_HOME`：

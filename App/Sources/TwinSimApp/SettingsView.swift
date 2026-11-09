@@ -5,9 +5,13 @@ struct SettingsView: View {
     @Environment(AppStore.self) private var store
     @State private var androidHome = ""
     @State private var developerDir = ""
+    @State private var androidCpus = 0
+    @State private var androidRamMB = 0
     @State private var applying = false
 
-    private var draft: BackendSettings { BackendSettings(androidHome: androidHome, developerDir: developerDir) }
+    private var draft: BackendSettings {
+        BackendSettings(androidHome: androidHome, developerDir: developerDir, androidCpus: androidCpus, androidRamMB: androidRamMB)
+    }
 
     var body: some View {
         Form {
@@ -20,6 +24,21 @@ struct SettingsView: View {
                 Text("宿主工具链")
             } footer: {
                 Text("留空时由后端自动选择。修改后会重新启动后端，已运行的设备继续由引擎管理并重新核对状态。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
+                Picker("CPU 核心", selection: $androidCpus) {
+                    Text("自动（\(BackendSettings.autoCpus) 核）").tag(0)
+                    ForEach(1...BackendSettings.hostCpus, id: \.self) { Text("\($0) 核").tag($0) }
+                }
+                Picker("内存", selection: $androidRamMB) {
+                    Text("自动（\(BackendSettings.autoRamMB / 1024) GB）").tag(0)
+                    ForEach(HardwareChoices.ram(max: BackendSettings.maxAndroidRamMB), id: \.self) { Text(HardwareChoices.label($0)).tag($0) }
+                }
+            } header: {
+                Text("Android 模拟器资源（默认）")
+            } footer: {
+                Text("用于新建设备、应用工作区和没有单独设置的设备；已运行的设备在下次启动时生效。单台设备可在「设备」页的「硬件」中单独设置。本机 \(BackendSettings.hostCpus) 核、\(BackendSettings.hostRamMB / 1024) GB 内存；模拟器的视频编码在客体内用软件完成，核心越多画面越流畅。" + HardwareChoices.note)
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
@@ -91,6 +110,8 @@ struct SettingsView: View {
     private func load() {
         androidHome = store.settings.androidHome
         developerDir = store.settings.developerDir
+        androidCpus = store.settings.androidCpus
+        androidRamMB = store.settings.androidRamMB
     }
 
     private func pathField(_ label: String, text: Binding<String>, prompt: String, check: (String) -> String?) -> some View {

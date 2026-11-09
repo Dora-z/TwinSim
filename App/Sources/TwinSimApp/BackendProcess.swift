@@ -6,18 +6,33 @@ import TwinSimAgentProtocol
 struct BackendSettings: Equatable, Sendable {
     var androidHome: String
     var developerDir: String
+    /// Default Android emulator CPU cores / RAM for devices without their own values (0 = automatic).
+    var androidCpus: Int = 0
+    var androidRamMB: Int = 0
 
     static let androidHomeKey = "androidHome"
     static let developerDirKey = "developerDir"
+    static let androidCpusKey = "androidCpus"
+    static let androidRamKey = "androidRamMB"
+
+    static let hostCpus = max(1, ProcessInfo.processInfo.activeProcessorCount)
+    static let hostRamMB = Int(ProcessInfo.processInfo.physicalMemory >> 20)
+    static var maxAndroidRamMB: Int { max(2048, hostRamMB - 4096) }
+    static var autoCpus: Int { min(6, max(2, hostCpus / 2)) }
+    static var autoRamMB: Int { hostRamMB >= 32 << 10 ? 4096 : 3072 }
 
     static func load(_ defaults: UserDefaults = .standard) -> BackendSettings {
         BackendSettings(androidHome: defaults.string(forKey: androidHomeKey) ?? "",
-                        developerDir: defaults.string(forKey: developerDirKey) ?? "")
+                        developerDir: defaults.string(forKey: developerDirKey) ?? "",
+                        androidCpus: defaults.integer(forKey: androidCpusKey),
+                        androidRamMB: defaults.integer(forKey: androidRamKey))
     }
 
     func save(_ defaults: UserDefaults = .standard) {
         defaults.set(androidHome, forKey: Self.androidHomeKey)
         defaults.set(developerDir, forKey: Self.developerDirKey)
+        defaults.set(androidCpus, forKey: Self.androidCpusKey)
+        defaults.set(androidRamMB, forKey: Self.androidRamKey)
     }
 
     /// Data directory chosen in Settings; nil means the default location. `TWINSIM_HOME` in the
@@ -68,6 +83,8 @@ final class BackendProcess: @unchecked Sendable {
             env["ANDROID_SDK_ROOT"] = settings.androidHome
         }
         if !settings.developerDir.isEmpty { env["DEVELOPER_DIR"] = settings.developerDir }
+        if settings.androidCpus > 0 { env["TWINSIM_ANDROID_CPUS"] = String(settings.androidCpus) }
+        if settings.androidRamMB > 0 { env["TWINSIM_ANDROID_RAM_MB"] = String(settings.androidRamMB) }
         env["TWINSIM_HOME"] = AgentProtocol.dataDirectory(environment: inherited)
         self.environment = env
     }

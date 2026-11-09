@@ -455,6 +455,7 @@ final class AppStore {
         case "instance":
             guard let partial = try? JSONDecoder().decode(Instance.self, from: Data(event.data.utf8)) else { return }
             if let index = instances.firstIndex(where: { $0.id == partial.id }) {
+                if let hardware = partial.hardware { instances[index].hardware = hardware }
                 instances[index].state = partial.state
                 instances[index].name = partial.name
                 instances[index].guestUid = partial.guestUid
@@ -566,11 +567,12 @@ final class AppStore {
         await reloadComponents()
     }
 
-    func createInstance(engineId: String, profileId: String, name: String, externalName: String?) async -> UUID? {
+    func createInstance(engineId: String, profileId: String, name: String, externalName: String?,
+                        cpus: Int? = nil, ramMB: Int? = nil) async -> UUID? {
         do {
             let accepted = try await submit { client, key in
                 try await client.createInstance(engineId: engineId, profileId: profileId, name: name,
-                                                externalName: externalName, key: key)
+                                                externalName: externalName, cpus: cpus, ramMB: ramMB, key: key)
             }
             await reloadInstances()
             let op = try await wait(accepted.operationId)

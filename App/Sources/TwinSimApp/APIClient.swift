@@ -137,8 +137,11 @@ struct APIClient: Sendable {
         return try await post("/components/\(id)/install", json: body, idempotencyKey: key)
     }
 
-    func createInstance(engineId: String, profileId: String, name: String, externalName: String?, key: String) async throws -> OperationAccepted {
+    func createInstance(engineId: String, profileId: String, name: String, externalName: String?,
+                        cpus: Int? = nil, ramMB: Int? = nil, key: String) async throws -> OperationAccepted {
         var body: [String: Any] = ["engineId": engineId, "profileId": profileId, "name": name]
+        if let cpus { body["cpus"] = cpus }
+        if let ramMB { body["ramMB"] = ramMB }
         if let externalName, !externalName.isEmpty { body["externalName"] = externalName }
         return try await post("/instances", json: body, idempotencyKey: key)
     }

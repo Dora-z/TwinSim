@@ -1,6 +1,6 @@
 # 让 AI 使用 TwinSim
 
-TwinSim 为 AI 提供四种接入方式，底层是同一组工具（共 35 个）。
+TwinSim 为 AI 提供四种接入方式，底层是同一组工具（共 36 个）。
 
 | 方式 | 适用 | 入口 |
 | --- | --- | --- |
@@ -65,7 +65,7 @@ MCP 服务器在 `initialize` 中返回使用说明，包括推荐流程、坐�
 | --- | --- |
 | 概览 | `status`、`list_components`、`list_devices`、`list_apps` |
 | 组件 | `install_component`（需要许可时先返回原文，`acceptLicenses=true` 只能在用户明确同意后使用） |
-| 设备 | `create_device`、`start_device`、`stop_device`、`delete_device`（永久删除，标注为 destructive）、`show_device` |
+| 设备 | `set_device_hardware`（Android CPU 核心和内存）、`create_device`（Android 可传 `cpus`、`ramMB`）、`start_device`、`stop_device`、`delete_device`（永久删除，标注为 destructive）、`show_device` |
 | 应用 | `delete_app`（从应用库删除，可同时从设备卸载，标注为 destructive）、`import_app`、`open_app`（可直接传文件路径，复用后台实例和已有安装）、`launch_app`、`uninstall_app` |
 | 观察 | `screenshot`、`ui_tree`（Android 控件树：文本、resource-id、content-desc、可点击、中心点）、`wait_for_text`、`logs` |
 | 操作 | `tap`、`tap_element`（按文本、ID 或描述点击）、`swipe`、`type_text`、`press_key` |

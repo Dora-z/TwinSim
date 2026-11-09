@@ -104,6 +104,7 @@ enum Labels {
         case "dxvk": "图形加速"
         case "display": "显示模式"
         case "delete-app": "删除应用"
+        case "hardware": "调整硬件"
         case "install": "安装应用"
         case "launch": "启动应用"
         case "uninstall": "卸载应用"
@@ -204,6 +205,8 @@ enum Labels {
             return "运行 Windows 程序需要 Rosetta 2。在终端运行 `softwareupdate --install-rosetta`，完成后重新检查。"
         case "WINE_MISSING":
             return "需要先在「组件」页安装 Windows 运行环境（Wine）。"
+        case "INVALID_HARDWARE":
+            return "CPU 核心或内存超出本机允许的范围。"
         case "D3DMETAL_MISSING":
             return "需要先在「组件」页安装 Windows 游戏加速（Apple D3DMetal），并同意 Apple 的许可。"
         case "LICENSE_UNAVAILABLE":
