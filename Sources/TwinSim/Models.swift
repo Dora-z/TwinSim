@@ -77,6 +77,8 @@ struct Device: Codable, Sendable {
     var ramMB: Int? = nil
     /// "cpus/ramMB" last written to the engine; differs from the desired values until applied.
     var appliedHardware: String? = nil
+    /// Local port forwarded to the guest's frida-server while it runs.
+    var fridaPort: Int? = nil
 
     var driverName: String { "twinsim-" + id.uuidString.lowercased() }
 }
@@ -92,6 +94,7 @@ struct InstanceView: Encodable {
     let selinux: String?
     let capabilities: [String: Capability]
     var hardware: HardwareView? = nil
+    var frida: FridaView? = nil
 
     init(_ device: Device, capabilities: [String: Capability]) {
         id = device.id

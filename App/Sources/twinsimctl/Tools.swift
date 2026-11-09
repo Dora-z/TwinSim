@@ -762,6 +762,21 @@ final class Agent {
             return .text("Removed 127.0.0.1:\(port).")
         })
 
+        t.append(Tool(name: "frida_server", description: "Android (root profiles): start or stop TwinSim's built-in frida-server in the guest. start pushes the bundled frida-server, runs it as root on the guest loopback and forwards it to 127.0.0.1 on this Mac; it returns the address for `frida -H <address>` / frida.get_device_manager().add_remote_device(<address>). The host Frida client must have the same major version as the returned server version.",
+                      properties: ["device": deviceProp, "action": prop("string", "start or stop.", enum: ["start", "stop"])],
+                      required: ["device", "action"]) { [unowned self] a in
+            let d = try device(try a.require("device"))
+            try requireCapability(d, "frida")
+            if try a.require("action") == "stop" {
+                _ = try action(Self.id(d), "frida-stop", [:], wait: cap(60))
+                return .text("frida-server stopped.")
+            }
+            let op = try action(Self.id(d), "frida-start", [:], wait: cap(300))
+            let r = op["result"] as? [String: String] ?? [:]
+            let address = "\(r["host"] ?? "127.0.0.1"):\(r["localPort"] ?? "?")"
+            return .text("frida-server \(r["version"] ?? "") running (guest pid \(r["pid"] ?? "?")) at \(address).\nfrida-ps -H \(address) -ai\nfrida -H \(address) -f <package>")
+        })
+
         t.append(Tool(name: "windows_tool", description: "Windows (Wine) devices: open a built-in Windows utility in its own window: winecfg, explorer, regedit, taskmgr, cmd, control, uninstaller or notepad.",
                       properties: ["device": deviceProp, "tool": prop("string", "Utility name.", enum: ["winecfg", "explorer", "regedit", "taskmgr", "cmd", "control", "uninstaller", "notepad"])],
                       required: ["device", "tool"]) { [unowned self] a in

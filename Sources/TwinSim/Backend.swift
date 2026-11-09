@@ -13,6 +13,7 @@ actor Backend {
     private var windowCaptures: [UUID: Wine.WindowCapture] = [:]
     private let importer: Importer
     let scratch: URL
+    private let environment: [String: String]
 
     private let epoch = UUID().uuidString
     private var sequence = 0
@@ -21,6 +22,7 @@ actor Backend {
 
     init(_ config: Configuration) throws {
         stateFile = config.root.appendingPathComponent("state.json")
+        environment = config.environment
         scratch = config.root.appendingPathComponent("scratch")
         try Files.directory(scratch)
         let artifacts = config.root.appendingPathComponent("artifacts")
@@ -235,9 +237,13 @@ actor Backend {
             "logs": online,
             "snapshot": isAndroid ? online : .unsupported,
             "liveVideo": isAndroid ? (androidVideo.installed ? online : .blocked("ANDROID_DISPLAY_MISSING")) : .unsupported,
-            "frida": .unsupported,
+            "frida": !isAndroid ? .unsupported
+                : device.profileId.rootMode == "none" ? .blocked("ROOT_PROFILE_REQUIRED")
+                : FridaServer.binary(environment) == nil ? .blocked("FRIDA_MISSING") : online,
         ])
         if isAndroid {
+            view.frida = FridaView(version: FridaServer.version(environment), running: device.fridaPort != nil,
+                                   host: "127.0.0.1", localPort: device.fridaPort)
             let hw = android.hardware(device)
             let key = "\(hw.cpus)/\(hw.ramMB)"
             view.hardware = HardwareView(cpus: hw.cpus, ramMB: hw.ramMB, custom: device.cpus != nil || device.ramMB != nil,
@@ -412,7 +418,7 @@ actor Backend {
         let device = try device(id)
         guard ["start", "stop", "delete", "install", "launch", "root", "writable-system", "snapshot-save",
                "snapshot-load", "tap", "key", "text", "shell", "uninstall", "guest-push", "forward", "unforward",
-               "wine-tool", "dxvk", "display", "hardware"].contains(action) else {
+               "wine-tool", "dxvk", "display", "hardware", "frida-start", "frida-stop"].contains(action) else {
             throw BackendError("ACTION_NOT_FOUND", "No such instance action.")
         }
         if action == "install" {
@@ -521,6 +527,7 @@ actor Backend {
         device.guestUid = nil
         device.selinux = nil
         device.forwardedPorts = nil
+        device.fridaPort = nil
         try put(device)
     }
 
@@ -763,6 +770,61 @@ actor Backend {
             }
             try await windows.applyDisplay(driver, retina: value == "retina")
             return ["display": value, "note": "Restart running programs to apply."]
+        case (.android, "frida-start"):
+            guard device.profileId.rootMode != "none" else {
+                throw BackendError("ROOT_PROFILE_REQUIRED", "Frida needs a root profile (android-research, android-google-apis or android-magisk).")
+            }
+            guard let binary = FridaServer.binary(environment) else {
+                throw BackendError("FRIDA_MISSING", "This TwinSim build does not include frida-server.")
+            }
+            _ = try await android.cli(["root", "verify", driver], timeout: 120)
+            let magisk = device.profileId.rootMode == "magisk"
+            func asRoot(_ command: String) -> [String] { magisk ? ["shell", "su", "-c", Android.quote(command)] : ["shell", command] }
+            let remote = FridaServer.remotePath
+            // Push only when the guest copy differs from the bundled one.
+            let size = Files.size(binary)
+            let existing = (try? await android.adb(driver, asRoot("stat -c %s \(remote) 2>/dev/null")))?.text
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if existing != String(size) {
+                _ = try await android.adb(driver, ["push", binary.path, remote], timeout: 300)
+            }
+            _ = try await android.adb(driver, asRoot("chmod 755 \(remote)"))
+            func pid() async -> String {
+                ((try? await android.adb(driver, asRoot("pidof \(FridaServer.processName)")))?.text ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            var current = await pid()
+            if current.isEmpty {
+                _ = try await android.adb(driver, asRoot("\(remote) -l 127.0.0.1:\(FridaServer.guestPort) -D"), timeout: 30)
+                for _ in 0..<25 where current.isEmpty {
+                    try await Task.sleep(for: .milliseconds(200))
+                    current = await pid()
+                }
+                guard !current.isEmpty else {
+                    throw BackendError("FRIDA_START_FAILED", "frida-server did not stay running in the guest.", retryable: true)
+                }
+            }
+            if let port = device.fridaPort, device.forwardedPorts?.contains(port) == true {
+                return ["host": "127.0.0.1", "localPort": String(port), "pid": current, "version": FridaServer.version(environment) ?? ""]
+            }
+            let response = try await android.adb(driver, ["forward", "tcp:0", "tcp:\(FridaServer.guestPort)"])
+            guard let localPort = Int(response.text.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+                throw BackendError("INVALID_TOOL_RESPONSE", "ADB did not return the forwarded port.")
+            }
+            device.forwardedPorts = (device.forwardedPorts ?? []) + [localPort]
+            device.fridaPort = localPort
+            try put(device)
+            return ["host": "127.0.0.1", "localPort": String(localPort), "pid": current, "version": FridaServer.version(environment) ?? ""]
+        case (.android, "frida-stop"):
+            let magisk = device.profileId.rootMode == "magisk"
+            let kill = "pkill -f \(FridaServer.processName) || killall \(FridaServer.processName) || true"
+            _ = try? await android.adb(driver, magisk ? ["shell", "su", "-c", Android.quote(kill)] : ["shell", kill])
+            if let port = device.fridaPort {
+                _ = try? await android.adb(driver, ["forward", "--remove", "tcp:\(port)"])
+                device.forwardedPorts?.removeAll { $0 == port }
+            }
+            device.fridaPort = nil
+            try put(device)
         case (.android, "unforward"):
             guard let localPort = request.localPort, device.forwardedPorts?.contains(localPort) == true else {
                 throw BackendError("FORWARD_NOT_FOUND", "No managed forward uses that port.")

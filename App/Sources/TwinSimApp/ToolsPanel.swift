@@ -21,6 +21,7 @@ struct ToolsPanel: View {
                 section("writableSystem") { WritableSystemTool(instance: instance) }
                 section("snapshot") { SnapshotTool(instance: instance) }
                 section("guestFiles") { FileTransferTool(instance: instance) }
+                section("frida") { FridaTool(instance: instance) }
                 section("portForward") { PortForwardTool(instance: instance) }
             }
             .padding(14)
@@ -287,6 +288,64 @@ struct PortForwardTool: View {
             if await store.run(instance.id, "unforward", body: ["localPort": local]) != nil {
                 forwards.removeAll { $0.local == local }
             }
+        }
+    }
+}
+
+/// Built-in frida-server: pushed to the guest, started as root, reached through an ADB forward on 127.0.0.1.
+struct FridaTool: View {
+    @Environment(AppStore.self) private var store
+    let instance: Instance
+    @State private var running = false
+    @State private var package = ""
+
+    var body: some View {
+        let frida = instance.frida
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                if let address = frida?.address, frida?.running == true {
+                    Image(systemName: "circle.fill").foregroundStyle(.green).font(.caption2)
+                    Text("运行中 · \(address)").font(.callout.monospaced()).textSelection(.enabled)
+                    Spacer()
+                    Button("复制地址") { copy(address) }
+                    Button("停止") { act("frida-stop") }.disabled(running)
+                } else {
+                    Text("未运行").foregroundStyle(.secondary)
+                    Spacer()
+                    Button("启动 frida-server") { act("frida-start") }.disabled(running)
+                }
+                if running { ProgressView().controlSize(.small) }
+            }
+            if let address = frida?.address, frida?.running == true {
+                TextField("包名（可选，例如 com.example.app）", text: $package).textFieldStyle(.roundedBorder)
+                let target = package.trimmingCharacters(in: .whitespaces)
+                command("frida-ps -H \(address) -ai")
+                command(target.isEmpty ? "frida -H \(address) -F" : "frida -H \(address) -f \(target)")
+            }
+            Text("TwinSim 内置 frida-server \(frida?.version ?? "")（Android arm64），以 root 在客体中运行，只监听客体回环地址，通过 ADB 转发到本机 127.0.0.1。电脑上的 Frida 客户端主版本须一致（pip install \"frida-tools\" \"frida==\(frida?.version?.split(separator: ".").first.map(String.init) ?? "17").*\"）。设备停止后需重新启动。")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    private func command(_ text: String) -> some View {
+        HStack {
+            Text(text).font(.caption.monospaced()).textSelection(.enabled).lineLimit(1).truncationMode(.middle)
+            Spacer()
+            Button("复制") { copy(text) }.controlSize(.small)
+        }
+    }
+
+    private func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    private func act(_ action: String) {
+        running = true
+        Task {
+            _ = await store.run(instance.id, action)
+            await store.refreshInstance(instance.id)
+            running = false
         }
     }
 }

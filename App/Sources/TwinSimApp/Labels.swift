@@ -118,6 +118,8 @@ enum Labels {
         case "guest-push": "传入文件"
         case "forward": "端口转发"
         case "unforward": "取消转发"
+        case "frida-start": "启动 frida-server"
+        case "frida-stop": "停止 frida-server"
         default: id
         }
     }
@@ -205,6 +207,12 @@ enum Labels {
             return "运行 Windows 程序需要 Rosetta 2。在终端运行 `softwareupdate --install-rosetta`，完成后重新检查。"
         case "WINE_MISSING":
             return "需要先在「组件」页安装 Windows 运行环境（Wine）。"
+        case "FRIDA_MISSING":
+            return "此 TwinSim 构建未包含 frida-server。请使用官方发布的 TwinSim.app。"
+        case "FRIDA_START_FAILED":
+            return "frida-server 没能在客体中保持运行，可在客体 shell 中运行 /data/local/tmp/twinsim-frida-server 查看原因。"
+        case "ROOT_PROFILE_REQUIRED":
+            return "需要带 root 的系统镜像（研究版、Google APIs 或 Magisk 配置）。"
         case "INVALID_HARDWARE":
             return "CPU 核心或内存超出本机允许的范围。"
         case "D3DMETAL_MISSING":

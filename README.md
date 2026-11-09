@@ -8,7 +8,7 @@
 2. 当前发行包为本地签名（ad hoc），未经 Apple 公证。首次打开时在 Finder 中右键点 TwinSim →「打开」，或执行 `xattr -dr com.apple.quarantine /Applications/TwinSim.app`。
 3. 首次启动后按「组件」页提示安装所需引擎。iOS Simulator 需要完整 Xcode 和 iOS runtime。
 
-AI 接入（MCP、`twinsim` 命令、函数调用）见 [docs/ai.md](docs/ai.md)。从源码构建见 [docs/frontend.md](docs/frontend.md)。本项目以 [GNU 通用公共许可证第 3 版（GPL-3.0）](LICENSE) 开源。应用内置的第三方组件（Vapor、Jidr 等）保留各自许可，声明位于 `TwinSim.app/Contents/Resources/BackendNotices`。
+AI 接入（MCP、`twinsim` 命令、函数调用）见 [docs/ai.md](docs/ai.md)。从源码构建见 [docs/frontend.md](docs/frontend.md)。本项目以 [GNU 通用公共许可证第 3 版（GPL-3.0）](LICENSE) 开源。应用内置的第三方组件（Vapor、Jidr、frida-server 等）保留各自许可，声明位于 `TwinSim.app/Contents/Resources/BackendNotices`。
 
 TwinSim 是独立安装的 Apple Silicon macOS 应用。用户安装 `TwinSim.app` 后，可以创建完整的虚拟设备，也可以导入应用并从应用库打开。运行所需的镜像和大型组件在首次用到时准备。本文覆盖后端、安装交付和前端对接，界面由独立开发者实现。
 

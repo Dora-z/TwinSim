@@ -24,6 +24,8 @@ mkdir -p "$dir/home"
 # (`open --stderr` fails with LaunchServices error -10810 here, so the self-test writes its own log.)
 extra=()
 [[ -n ${TWINSIM_APPWINDOW_DENSITY:-} ]] && extra+=(--env "TWINSIM_APPWINDOW_DENSITY=$TWINSIM_APPWINDOW_DENSITY")
+[[ -n ${TWINSIM_SELFTEST_KEEP_FRIDA:-} ]] && extra+=(--env "TWINSIM_SELFTEST_KEEP_FRIDA=1")
+[[ -n ${TWINSIM_SELFTEST_FRIDA_PYTHON:-} ]] && extra+=(--env "TWINSIM_SELFTEST_FRIDA_PYTHON=$TWINSIM_SELFTEST_FRIDA_PYTHON")
 open -W -n "$app" ${extra[@]+"${extra[@]}"} \
     --env "TWINSIM_HOME=$dir/home" \
     --env "TWINSIM_SELF_TEST=$dir/report" \

@@ -70,7 +70,7 @@ MCP 服务器在 `initialize` 中返回使用说明，包括推荐流程、坐�
 | 观察 | `screenshot`、`ui_tree`（Android 控件树：文本、resource-id、content-desc、可点击、中心点）、`wait_for_text`、`logs` |
 | 操作 | `tap`、`tap_element`（按文本、ID 或描述点击）、`swipe`、`type_text`、`press_key` |
 | Windows | `windows_tool`（winecfg、regedit、taskmgr、cmd 等）、`windows_settings`（DXVK、Retina/标准显示） |
-| 研究 | `shell`、`verify_root`、`set_writable_system`、`snapshot`、`push_file`、`pull_file`、`port_forward`、`remove_port_forward` |
+| 研究 | `shell`、`verify_root`、`set_writable_system`、`snapshot`、`push_file`、`pull_file`、`port_forward`、`remove_port_forward`、`frida_server`（启动或停止内置 frida-server，返回本机地址） |
 | 长操作 | `wait_operation` |
 
 设备参数可以是完整 ID、唯一的 ID 前缀或设备名。应用参数可以是 ID、bundle ID 或名称。出错时返回 `isError` 及错误码，并在 `Hint:` 一行给出下一步建议，例如 vphone 宿主机未配置时提示告诉用户、不要重试。
@@ -81,7 +81,7 @@ MCP 服务器在 `initialize` 中返回使用说明，包括推荐流程、坐�
 
 ### 平台能力
 
-- Android：全部工具可用。`android-research` 和 `android-google-apis` 配置提供 adb root、系统可写和快照。
+- Android：全部工具可用。`android-research` 和 `android-google-apis` 配置提供 adb root、系统可写和快照。带 root 的配置可用 `frida_server` 启动 TwinSim 内置的 frida-server（17.26.2，arm64），返回 `127.0.0.1:<端口>`；宿主机的 Frida 客户端主版本须为 17。
 - iOS Simulator：截图、日志、打开和停止应用。后端不支持输入，`tap` 等工具会返回 `CAPABILITY_UNSUPPORTED`。
 - Windows（.exe/.msi，经 Wine）：程序以原生 Mac 窗口运行。`profileId: "windows-d3dmetal"` 使用 Apple D3DMetal（Direct3D 11/12 → Metal），需要用户先同意 Apple 的许可并安装 `windows-d3dmetal` 组件。`screenshot` 截取程序窗口，需要「录屏与系统录音」权限；`tap`、`type_text`、`press_key` 通过 CGEvent 发送，需要「辅助功能」权限；`shell` 执行 `cmd /c`；`ui_tree`、`swipe` 不适用。
 - iOS 真机 IPA：需要 vphone 研究虚拟机。宿主机未配置时，`open_app` 返回 `RESEARCH_GUESTS_DISABLED` 等原因。

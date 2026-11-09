@@ -1,6 +1,6 @@
 ---
 name: twinsim
-description: Run and test Android apps (APK) and iOS Simulator apps (.app) on this Mac through TwinSim — open an app in an emulator/simulator, take screenshots, read the UI tree, tap/type/swipe, read logs, run guest shell commands (root on research profiles), forward ports for Frida. Use when the user asks to run, try, test, inspect or debug a mobile app or emulator here.
+description: Run and test Android apps (APK) and iOS Simulator apps (.app) on this Mac through TwinSim — open an app in an emulator/simulator, take screenshots, read the UI tree, tap/type/swipe, read logs, run guest shell commands (root on research profiles), start the built-in frida-server. Use when the user asks to run, try, test, inspect or debug a mobile app or emulator here.
 ---
 
 # TwinSim
@@ -29,7 +29,7 @@ If the TwinSim MCP server is connected (tools named `mcp__twinsim__*`), prefer t
 
 ## Facts and limits
 
-- Android: touch, keys, text, swipe, UI tree, shell, logcat, file push/pull, port forwarding. Profiles `android-research` and `android-google-apis` have adb root (`verify_root`), `set_writable_system`, snapshots.
+- Android: touch, keys, text, swipe, UI tree, shell, logcat, file push/pull, port forwarding. Profiles `android-research` and `android-google-apis` have adb root (`verify_root`), `set_writable_system`, snapshots, and `frida_server` (built-in frida-server 17.x; returns `127.0.0.1:<port>` for `frida -H` — the host client must be Frida 17).
 - iOS Simulator (`.app` built for the simulator): screenshots and logs only — no input. iOS logs can take up to a minute; retry on `OUTPUT_LIMIT`.
 - Device `.ipa` files need the iOS research VM (vphone). If the result says `RESEARCH_GUESTS_DISABLED` or another vphone setup code, tell the user — the host needs manual setup; do not retry.
 - First boot of a device takes 30–60 s; `open_app` waits. If a result says an operation is still running, run `twinsim wait_operation --operationId <id>`.

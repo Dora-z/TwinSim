@@ -82,6 +82,7 @@ final class SelfTest {
         if platforms.contains("appwindow") { await appWindow() }
         if platforms.contains("perf") { await performance() }
         if platforms.contains("hardware") { await hardware() }
+        if platforms.contains("frida") { await frida() }
         await snapshotMain("09-devices", select: .devices)
         renderOffscreen(AISettingsView().environment(store), size: CGSize(width: 640, height: 1000), "12-ai-settings")
         renderOffscreen(SettingsView().environment(store), size: CGSize(width: 560, height: 1300), "13-settings")
@@ -344,6 +345,86 @@ final class SelfTest {
             check("reject out-of-range cores", (error as? APIError)?.code == "INVALID_HARDWARE", error.localizedDescription)
         }
         _ = await store.deleteInstance(id)
+    }
+
+    // MARK: Built-in frida-server
+
+    private func frida() async {
+        log("== Built-in frida-server ==")
+        guard let id = await store.createInstance(engineId: "android-emulator", profileId: "android-google-apis",
+                                                  name: "Frida Test", externalName: nil) else {
+            check("create device", false, store.notices.last?.message ?? ""); return
+        }
+        await store.run(id, "start")
+        await store.refreshInstance(id)
+        let cap = store.instance(id)?.capability("frida")
+        check("frida capability available", cap?.isAvailable == true, "\(cap?.availability ?? "-") \(cap?.reasonCode ?? "")")
+        var t = Date()
+        let op = await store.run(id, "frida-start")
+        let port = op?.result?["localPort"].flatMap(Int.init)
+        check("frida-start", port != nil, String(format: "%@ pid %@ v%@ %.1fs", "127.0.0.1:\(port ?? 0)", op?.result?["pid"] ?? "?",
+                                                 op?.result?["version"] ?? "?", Date().timeIntervalSince(t)))
+        guard let port else { _ = await store.deleteInstance(id); return }
+        let pid = (try? await store.perform(id, "shell", body: ["argv": ["sh", "-c", "pidof twinsim-frida-server; id -u"]], timeout: 60))?
+            .result?["stdout"] ?? ""
+        let lines = pid.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        check("frida-server runs in guest (root shell)", lines.count == 2 && Int(lines[0]) != nil && lines[1] == "0",
+              pid.replacingOccurrences(of: "\n", with: " "))
+        // adb accepts the forward even without a listener but then drops the connection; an HTTP answer means frida-server replied.
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/")!); request.timeoutInterval = 10
+        let reply = try? await URLSession.shared.data(for: request)
+        check("frida-server answers on 127.0.0.1:\(port)", reply != nil,
+              (reply?.1 as? HTTPURLResponse).map { "HTTP \($0.statusCode) \($0.value(forHTTPHeaderField: "Server") ?? "")" } ?? "no response")
+        await store.refreshInstance(id)
+        check("instance reports frida status", store.instance(id)?.frida?.running == true && store.instance(id)?.frida?.localPort == port,
+              store.instance(id)?.frida?.address ?? "-")
+        if let instance = store.instance(id) {
+            renderOffscreen(ToolsPanel(instance: instance).environment(store), size: CGSize(width: 420, height: 900), "14-frida-tools")
+        }
+        t = Date()
+        let again = await store.run(id, "frida-start")
+        check("frida-start is idempotent", again?.result?["localPort"] == String(port), String(format: "%.1fs", Date().timeIntervalSince(t)))
+
+        // Optional: attach with a host Frida client of the same major version (TWINSIM_SELFTEST_FRIDA_PYTHON=/path/to/python).
+        if let python = ProcessInfo.processInfo.environment["TWINSIM_SELFTEST_FRIDA_PYTHON"] {
+            let target = ((try? await store.perform(id, "shell", body: ["argv": ["sh", "-c", "pidof com.android.systemui"]], timeout: 60))?
+                .result?["stdout"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let script = """
+            import frida, sys
+            device = frida.get_device_manager().add_remote_device(sys.argv[1])
+            session = device.attach(int(sys.argv[2]))
+            out = []
+            s = session.create_script("send(Process.arch + ' ' + Process.id + ' ' + Process.enumerateModules().length + ' modules')")
+            s.on('message', lambda m, d: out.append(m.get('payload') or m.get('description')))
+            s.load(); session.detach()
+            print(frida.__version__, out[0] if out else 'no-message')
+            """
+            let result = await Task.detached { () -> String in
+                let p = Process(); p.executableURL = URL(fileURLWithPath: python)
+                p.arguments = ["-I", "-c", script, "127.0.0.1:\(port)", target]
+                let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
+                try? p.run(); p.waitUntilExit()
+                return String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            }.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            check("Frida client attaches to SystemUI (pid \(target))", result.contains("arm64 \(target)"), result.split(separator: "\n").last.map(String.init) ?? "")
+        }
+
+        // Stop through the CLI (same path as the MCP tool).
+        let cli = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/twinsim")
+        let out = await Task.detached { () -> String in
+            let p = Process(); p.executableURL = cli
+            p.arguments = ["frida_server", "--device", id.uuidString, "--action", "stop"]
+            var e = ProcessInfo.processInfo.environment; e["TWINSIM_NO_LAUNCH"] = "1"; p.environment = e
+            let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
+            try? p.run(); p.waitUntilExit()
+            return String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        }.value
+        let after = (try? await store.perform(id, "shell", body: ["argv": ["sh", "-c", "pidof twinsim-frida-server || echo none"]], timeout: 60))?
+            .result?["stdout"] ?? ""
+        await store.refreshInstance(id)
+        check("CLI/MCP frida_server stop", out.contains("stopped") && after.contains("none") && store.instance(id)?.frida?.running == false,
+              out.trimmingCharacters(in: .whitespacesAndNewlines))
+        if ProcessInfo.processInfo.environment["TWINSIM_SELFTEST_KEEP_FRIDA"] == nil { _ = await store.deleteInstance(id) }
     }
 
     // MARK: Android performance (cores, hardware decode, fast input, frame rates)

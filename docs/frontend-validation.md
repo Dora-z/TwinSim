@@ -93,6 +93,23 @@
 
 未在真实客户端中验证：未在 Claude Code、Claude Desktop、Cursor、VS Code、Codex、Gemini CLI 中实际加载配置，本机未安装这些 CLI。协议层面已由上面的 MCP 客户端测试覆盖。
 
+## 内置 frida-server（0.4.3）
+
+`TWINSIM_SELF_TEST_PLATFORMS=frida`，在打包后的应用中新建 `android-google-apis` 设备：**11/11 通过**。`TWINSIM_SELFTEST_FRIDA_PYTHON` 指向装有 Frida 17.26.2 客户端的 Python 时，还会做一次真实附加。
+
+| 检查 | 结果 |
+| --- | --- |
+| 能力 `frida` | `available` |
+| `frida-start`（含推送 85 MB frida-server） | 约 2 秒，返回 `127.0.0.1:<端口>`、客体 pid、版本 17.26.2 |
+| 客体进程 | `pidof twinsim-frida-server` 有结果，root shell |
+| 本机端口 | frida-server 以 HTTP 404 应答（说明转发后有服务在监听，不只是 ADB 接受连接） |
+| 实例 `frida` 字段 | `running`，端口与返回值一致 |
+| 再次 `frida-start` | 返回同一端口 |
+| Frida 17.26.2 Python 客户端附加 SystemUI | `arm64`，pid 一致，读到 326 个模块 |
+| `twinsim frida_server --action stop`（与 MCP 同一路径） | 进程结束，转发移除，实例显示未运行 |
+
+[工具面板截图](images/frontend/14-frida-tools.png)。附加脚本最初引用了 `Java.available`，在 Frida 17 中报错：Frida 17 的脚本运行时不再内置 Java 桥。
+
 ## Android 模拟器资源自定义（0.4.1）
 
 `TWINSIM_SELF_TEST_PLATFORMS=hardware`：**11/11 通过**，在客体内读取 `/proc/cpuinfo` 和 `MemTotal` 核对。

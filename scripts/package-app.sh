@@ -50,6 +50,29 @@ mkdir -p "$app/Contents/Resources/AI"
 cp -R ai/skills "$app/Contents/Resources/AI/skills"
 install -m 644 ai/AGENTS.md "$app/Contents/Resources/AI/AGENTS.md"
 cp -R "$payload/Contents/Resources/BackendNotices" "$app/Contents/Resources/BackendNotices"
+
+# Bundled frida-server for Android guests (pinned release, SHA-256 checked; wxWindows Library Licence).
+frida_version=17.26.2
+frida_xz_sha=84519c157b76b9050cfcf197b530288040f8dca34d66341f5d5a688f792a3af9
+frida_copying_sha=5ea1544b51a28bc823b03159190d4108f9fb4f4ef912389f5137c6d295e175b2
+frida_cache=$root/.build/frida
+mkdir -p "$frida_cache"
+frida_xz=$frida_cache/frida-server-$frida_version-android-arm64.xz
+if [[ ! -f $frida_xz ]] || ! echo "$frida_xz_sha  $frida_xz" | shasum -a 256 -c --status; then
+    curl -fsSL --retry 3 -o "$frida_xz" \
+        "https://github.com/frida/frida/releases/download/$frida_version/frida-server-$frida_version-android-arm64.xz"
+fi
+echo "$frida_xz_sha  $frida_xz" | shasum -a 256 -c --status || { echo "frida-server checksum mismatch" >&2; exit 1; }
+if [[ ! -f $frida_cache/COPYING ]] || ! echo "$frida_copying_sha  $frida_cache/COPYING" | shasum -a 256 -c --status; then
+    curl -fsSL --retry 3 -o "$frida_cache/COPYING" "https://raw.githubusercontent.com/frida/frida/$frida_version/COPYING"
+fi
+echo "$frida_copying_sha  $frida_cache/COPYING" | shasum -a 256 -c --status || { echo "Frida licence checksum mismatch" >&2; exit 1; }
+mkdir -p "$app/Contents/Resources/Android"
+python3 -c 'import lzma, sys; open(sys.argv[2], "wb").write(lzma.open(sys.argv[1]).read())' \
+    "$frida_xz" "$app/Contents/Resources/Android/frida-server"
+chmod 755 "$app/Contents/Resources/Android/frida-server"
+printf '%s\n' "$frida_version" > "$app/Contents/Resources/Android/frida-server.version"
+install -m 644 "$frida_cache/COPYING" "$app/Contents/Resources/BackendNotices/frida-COPYING"
 printf 'APPL????' > "$app/Contents/PkgInfo"
 
 iconset=$(mktemp -d "${TMPDIR:-/tmp}/twinsim-icon.XXXXXX")/AppIcon.iconset

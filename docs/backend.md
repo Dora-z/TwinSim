@@ -46,7 +46,7 @@ bash scripts/package-backend.sh
 
 `android-aosp` 是普通配置，`android-research` 是 AOSP adb-root 配置，`android-magisk` 是 AOSP Magisk 配置，`android-google-apis` 对应 API 34 Google APIs 研究配置。iOS 配置为 `ios-development` 和 `ios-research`。应用模式默认复用已有安装和数据。Android 实时画面是当前客体显示器，应用窗口的呈现由前端负责。
 
-开发工具可通过 `guest-push` 传入客体，参数为 `localPath` 与 `remotePath`。Android 的 `forward` 接收 `guestPort` 并返回分配的回环端口，`unforward` 接收 `localPort`。Frida 客户端可使用该端口连接用户启动的客体 Frida server。 [Frida Android 文档](https://frida.re/docs/android/)
+开发工具可通过 `guest-push` 传入客体，参数为 `localPath` 与 `remotePath`。Android 的 `forward` 接收 `guestPort` 并返回分配的回环端口，`unforward` 接收 `localPort`。Frida 客户端可使用该端口连接用户启动的客体 Frida server。带 root 的 Android 配置还可用 `frida-start` / `frida-stop` 启停应用包内置的 frida-server（结果含 `host`、`localPort`、`pid`、`version`），详见 [frontend.md](frontend.md)。 [Frida Android 文档](https://frida.re/docs/android/)
 
 ## 本地验证入口
 
