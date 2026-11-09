@@ -393,10 +393,10 @@ struct AppWindowView: View {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button { session?.key(.back) } label: { Label("返回", systemImage: "chevron.backward") }
                     .help("返回（Esc 或右键）")
-                Button { openWindow(value: ScreenTarget(instanceId: target.instanceId)) } label: {
-                    Label("设备视图", systemImage: "iphone")
+                Button { switchToDeviceView() } label: {
+                    Label("改用设备视图", systemImage: "iphone")
                 }
-                .help("打开完整设备视图")
+                .help("在完整设备视图中运行此应用，并记住这个选择（部分银行、支付类应用不允许在独立窗口中运行）")
             }
         }
         .onAppear {
@@ -428,10 +428,16 @@ struct AppWindowView: View {
     }
 
     private var fallback: some View {
-        Button("改用设备视图打开") {
-            openWindow(value: ScreenTarget(instanceId: target.instanceId, artifactId: target.artifactId))
-            dismiss()
-        }
-        .buttonStyle(.borderedProminent)
+        Button("改用设备视图打开") { switchToDeviceView() }
+            .buttonStyle(.borderedProminent)
+    }
+
+    /// Reopens the app on the main display (device view) and remembers that for this app.
+    private func switchToDeviceView() {
+        guard let artifact else { return }
+        store.setPrefersDeviceView(artifact, true)
+        session?.close()
+        dismiss()
+        Task { await store.open(artifact, forceDeviceView: true) }
     }
 }

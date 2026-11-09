@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>TwinSim Promo</title>
+<style>
+:root{--bg:#081127;--blue:#4f9fff;--green:#5ccf88;--violet:#a78bfa;--pink:#f472b6;--text:#f3f6ff;--muted:#9fb0d6;}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1920px;height:1080px;overflow:hidden;background:var(--bg);color:var(--text);
+  font-family:"PingFang SC","SF Pro Display",-apple-system,"Helvetica Neue",sans-serif;-webkit-font-smoothing:antialiased}
+#stage{position:relative;width:1920px;height:1080px;overflow:hidden;background:var(--bg)}
+.mono{font-family:"SF Mono","SFMono-Regular",Menlo,monospace}
+.bg{position:absolute;inset:0;overflow:hidden}
+.blob{position:absolute;border-radius:50%;filter:blur(140px)}
+.grid{position:absolute;inset:-160px;background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);background-size:80px 80px;
+  -webkit-mask-image:radial-gradient(ellipse at center,black 25%,transparent 72%)}
+.scene{position:absolute;inset:0;opacity:0}
+.a{position:absolute}
+.center{left:0;right:0;text-align:center}
+.grad{background:linear-gradient(90deg,#8cc2ff 0%,#6fe3a5 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+.kicker{font-size:22px;letter-spacing:8px;color:var(--green);font-weight:600}
+.h2{font-size:58px;font-weight:700;letter-spacing:-.5px;margin-top:14px}
+.header{top:78px}
+.watermark{position:absolute;left:56px;top:44px;display:flex;align-items:center;gap:14px;font-size:24px;font-weight:600;opacity:0;color:#dbe6ff}
+.watermark img{width:40px;height:40px}
+
+/* scene 1 */
+#s1glow{left:660px;top:120px;width:600px;height:600px;border-radius:50%;background:radial-gradient(circle,rgba(79,159,255,.55),rgba(92,207,136,.15) 45%,transparent 70%)}
+#s1icon{left:810px;top:200px;width:300px;height:300px}
+#s1title{top:520px;font-size:150px;font-weight:800;letter-spacing:-3px}
+#s1title span{display:inline-block}
+#s1sub{top:720px;font-size:38px;color:#c9d6f5;font-weight:500}
+#s1tags{top:810px;display:flex;justify-content:center;gap:22px}
+.tag{padding:12px 30px;border-radius:999px;font-size:26px;font-weight:600;border:1.5px solid rgba(255,255,255,.18);background:rgba(255,255,255,.06)}
+
+/* scene 2 */
+.card{width:520px;height:560px;top:300px;border-radius:32px;padding:44px 44px;
+  background:linear-gradient(160deg,rgba(255,255,255,.10),rgba(255,255,255,.03));border:1.5px solid rgba(255,255,255,.12);box-shadow:0 30px 80px rgba(0,0,0,.35)}
+.badge{width:120px;height:120px;border-radius:30px;display:flex;align-items:center;justify-content:center;font-size:34px;font-weight:800;color:#06122b;letter-spacing:.5px}
+.card h3{font-size:44px;margin-top:36px;font-weight:700}
+.card .plat{font-size:22px;color:var(--muted);margin-top:8px;letter-spacing:2px}
+.card ul{list-style:none;margin-top:34px}
+.card li{font-size:27px;color:#dfe7fb;margin:18px 0;display:flex;align-items:center;gap:14px}
+.card li i{width:10px;height:10px;border-radius:50%;flex:none}
+
+/* scene 3 */
+.chip{width:360px;height:84px;border-radius:20px;background:rgba(255,255,255,.95);color:#111827;display:flex;align-items:center;gap:18px;padding:0 20px;box-shadow:0 18px 40px rgba(0,0,0,.35)}
+.ficon{width:52px;height:52px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;color:#fff;flex:none}
+.chip b{font-size:25px;font-weight:600}
+.chip small{display:block;font-size:17px;color:#6b7280;margin-top:2px}
+#win{left:800px;top:250px;width:980px;height:640px;border-radius:22px;background:#f6f6f8;box-shadow:0 40px 120px rgba(0,0,0,.55);overflow:hidden;color:#111827}
+.tl{position:absolute;z-index:3;top:20px;width:14px;height:14px;border-radius:50%}
+#side{position:absolute;left:0;top:0;bottom:0;width:220px;background:#e9eaee;padding:70px 14px 0}
+#side div{font-size:19px;padding:10px 14px;border-radius:9px;margin-bottom:4px;color:#374151}
+#side .on{background:#d5d8df;font-weight:600;color:#111}
+#side .sec{font-size:13px;color:#9ca3af;padding:14px 14px 4px}
+#wtitle{position:absolute;left:250px;top:62px;font-size:34px;font-weight:700}
+#wsub{position:absolute;left:250px;top:110px;font-size:17px;color:#6b7280}
+.tile{width:160px;height:180px;border-radius:18px;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.07);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px}
+.tile .ficon{width:84px;height:84px;border-radius:20px;font-size:22px}
+.tile span{font-size:16px;color:#374151;font-weight:500}
+#drop{position:absolute;left:236px;top:150px;right:16px;bottom:16px;border:3px dashed #4f9fff;border-radius:18px;background:rgba(79,159,255,.07);display:flex;align-items:flex-end;justify-content:center;padding-bottom:26px;color:#2f6fd8;font-size:20px;font-weight:600}
+#toast{position:absolute;left:250px;right:30px;bottom:24px;height:64px;border-radius:14px;background:#111827;color:#fff;display:flex;align-items:center;padding:0 22px;gap:16px;font-size:19px}
+#toast .bar{position:absolute;left:0;bottom:0;height:4px;background:var(--green);border-radius:0 0 0 14px}
+#cursor{width:40px;height:40px;left:0;top:0}
+.ripple{position:absolute;border-radius:50%;border:4px solid rgba(255,255,255,.95);width:20px;height:20px;margin:-10px 0 0 -10px;pointer-events:none}
+#s3cap{top:945px;font-size:28px;color:#c9d6f5}
+
+/* scene 4 */
+.devwin{border-radius:14px;overflow:hidden;box-shadow:0 40px 100px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.08)}
+.devwin img.frame{display:block;width:100%}
+.ovl{position:absolute;overflow:hidden}
+.dot{position:absolute;border-radius:50%;width:27px;height:27px;margin:-13.5px 0 0 -13.5px;background:#5ac8fa}
+.pill{padding:18px 28px;border-radius:20px;background:rgba(255,255,255,.07);border:1.5px solid rgba(255,255,255,.13);font-size:27px;font-weight:600;display:flex;align-items:center;gap:16px;white-space:nowrap}
+.pill em{font-style:normal;width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;flex:none}
+.pill small{display:block;font-size:19px;color:var(--muted);font-weight:400;margin-top:4px}
+
+/* scene 5 */
+#term{left:130px;top:260px;width:1040px;height:640px;border-radius:20px;background:#0d1426;border:1.5px solid rgba(255,255,255,.1);box-shadow:0 40px 100px rgba(0,0,0,.55);overflow:hidden}
+#term .bar{height:48px;background:#151e35;display:flex;align-items:center;padding-left:20px;gap:9px}
+#term .bar i{width:14px;height:14px;border-radius:50%}
+#term .bar span{margin-left:auto;margin-right:auto;transform:translateX(-30px);color:#7d8bb0;font-size:17px}
+#tbody{padding:26px 32px;font-size:22px;line-height:1.62;white-space:pre}
+.p{color:var(--green)} .c{color:#f3f6ff} .o{color:#93a4cc} .k{color:#ffd479} .ok{color:#6fe3a5}
+.caret{display:inline-block;width:12px;height:26px;background:#f3f6ff;vertical-align:-5px;margin-left:2px}
+.feat{left:1240px;width:560px;height:118px;border-radius:22px;background:rgba(255,255,255,.06);border:1.5px solid rgba(255,255,255,.12);display:flex;align-items:center;gap:22px;padding:0 26px}
+.feat em{font-style:normal;width:64px;height:64px;border-radius:18px;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:800;color:#06122b;flex:none}
+.feat b{font-size:28px;display:block}
+.feat small{font-size:19px;color:var(--muted)}
+
+/* scene 6 */
+#shot{left:130px;top:250px;width:1100px;height:713px;border-radius:18px;overflow:hidden;box-shadow:0 40px 110px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.08)}
+#shot img{width:100%;display:block;transform-origin:62% 0%}
+.call{left:1310px;width:500px;height:130px;border-radius:22px;background:rgba(255,255,255,.06);border:1.5px solid rgba(255,255,255,.12);padding:24px 28px}
+.call b{font-size:28px;display:block}
+.call small{font-size:19px;color:var(--muted);display:block;margin-top:8px}
+.call:before{content:"";position:absolute;left:0;top:26px;bottom:26px;width:5px;border-radius:3px;background:var(--c)}
+
+/* scene 7 */
+#chat{left:130px;top:250px;width:1060px;height:640px;border-radius:24px;background:rgba(255,255,255,.05);border:1.5px solid rgba(255,255,255,.12);padding:34px 40px;overflow:hidden}
+.ubub{position:absolute;right:40px;top:34px;max-width:680px;background:#2f6fd8;color:#fff;padding:20px 26px;border-radius:22px 22px 6px 22px;font-size:26px;line-height:1.45}
+.tool{position:absolute;left:40px;width:900px;height:84px;border-radius:16px;background:#0d1426;border:1.5px solid rgba(255,255,255,.1);display:flex;align-items:center;padding:0 24px;gap:20px;font-size:22px}
+.tool .nm{color:#ffd479;font-weight:700;font-size:24px}
+.tool .args{color:#93a4cc}
+.tool .st{margin-left:auto;font-size:20px;display:flex;align-items:center;gap:10px}
+.spin{width:24px;height:24px;border-radius:50%;border:3px solid rgba(255,255,255,.2);border-top-color:#8cc2ff}
+.chk{width:28px;height:28px;border-radius:50%;background:var(--green);color:#06122b;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:17px}
+.abub{position:absolute;left:40px;max-width:820px;background:rgba(255,255,255,.1);padding:20px 26px;border-radius:22px 22px 22px 6px;font-size:26px;line-height:1.45}
+#phone{left:1330px;top:236px;width:376px;height:668px;border-radius:52px;background:#0b0f19;border:2px solid rgba(255,255,255,.18);padding:18px;box-shadow:0 40px 110px rgba(0,0,0,.6)}
+#pscreen{position:relative;width:340px;height:604px;border-radius:34px;overflow:hidden;background:#000}
+#flash{position:absolute;inset:0;background:#fff;opacity:0}
+.aichip{padding:14px 26px;border-radius:999px;font-size:23px;font-weight:600;background:rgba(255,255,255,.07);border:1.5px solid rgba(255,255,255,.14);white-space:nowrap}
+
+/* scene 8 */
+#s8glow{left:610px;top:40px;width:700px;height:700px;border-radius:50%;background:radial-gradient(circle,rgba(79,159,255,.5),rgba(92,207,136,.14) 45%,transparent 70%)}
+#s8icon{left:840px;top:150px;width:240px;height:240px}
+#s8title{top:410px;font-size:120px;font-weight:800;letter-spacing:-2px}
+#s8tag{top:575px;font-size:40px;color:#dbe6ff;font-weight:600}
+#s8url{top:680px;display:flex;justify-content:center}
+#s8url div{padding:18px 40px;border-radius:999px;background:rgba(255,255,255,.08);border:1.5px solid rgba(255,255,255,.18);font-size:32px;font-weight:600}
+#s8meta{top:790px;font-size:26px;color:var(--muted);letter-spacing:1px}
+#fade{position:absolute;inset:0;background:#000;opacity:0;pointer-events:none}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="bg">
+    <div class="blob" id="b1" style="width:900px;height:900px;background:#1f4fd1;opacity:.55"></div>
+    <div class="blob" id="b2" style="width:760px;height:760px;background:#1d8a5a;opacity:.32"></div>
+    <div class="blob" id="b3" style="width:620px;height:620px;background:#6d4fd8;opacity:.28"></div>
+    <div class="grid" id="grid"></div>
+  </div>
+
+  <div class="watermark" id="wm"><img src="assets/icon.png" alt=""><span>TwinSim</span></div>
+
+  <!-- 1 · Intro -->
+  <section class="scene" id="s1">
+    <div class="a" id="s1glow"></div>
+    <img class="a" id="s1icon" src="assets/icon.png" alt="">
+    <div class="a center" id="s1title"></div>
+    <div class="a center" id="s1sub">在 Apple Silicon Mac 上，同时运行 Android、iOS 与 Windows 应用</div>
+    <div class="a center" id="s1tags">
+      <div class="tag" style="color:#8ff0b6">Android</div>
+      <div class="tag" style="color:#9cc8ff">iOS Simulator</div>
+      <div class="tag" style="color:#c9b6ff">Windows</div>
+    </div>
+  </section>
+
+  <!-- 2 · Three platforms -->
+  <section class="scene" id="s2">
+    <div class="a center header" id="s2h"><div class="kicker">ONE MAC · THREE PLATFORMS</div><div class="h2">一台 Mac，<span class="grad">三个平台的应用</span></div></div>
+    <div class="a card" id="c0" style="left:140px">
+      <div class="badge" style="background:linear-gradient(135deg,#7ff0b0,#3fbf78)">APK</div>
+      <h3>Android 模拟器</h3><div class="plat">ARM64 · HYPERVISOR 加速</div>
+      <ul><li><i style="background:var(--green)"></i>导入 APK，一键安装并启动</li><li><i style="background:var(--green)"></i>独立应用窗口 · 硬件解码</li><li><i style="background:var(--green)"></i>可自定义 CPU 核心与内存</li></ul>
+    </div>
+    <div class="a card" id="c1" style="left:700px">
+      <div class="badge" style="background:linear-gradient(135deg,#a9d0ff,#4f9fff)">.app</div>
+      <h3>iOS Simulator</h3><div class="plat">XCODE · SIMCTL</div>
+      <ul><li><i style="background:var(--blue)"></i>Simulator .app 装好即用</li><li><i style="background:var(--blue)"></i>截图 · 日志 · 应用容器</li><li><i style="background:var(--blue)"></i>IPA 研究引擎（实验）</li></ul>
+    </div>
+    <div class="a card" id="c2" style="left:1260px">
+      <div class="badge" style="background:linear-gradient(135deg,#d6c8ff,#9b7bf5)">.exe</div>
+      <h3>Windows 程序</h3><div class="plat">WINEHQ 上游 WINE</div>
+      <ul><li><i style="background:var(--violet)"></i>.exe / .msi 原生 Mac 窗口</li><li><i style="background:var(--violet)"></i>DXVK · Apple D3DMetal</li><li><i style="background:var(--violet)"></i>不依赖 CrossOver</li></ul>
+    </div>
+  </section>
+
+  <!-- 3 · Import & open -->
+  <section class="scene" id="s3">
+    <div class="a center header" id="s3h"><div class="kicker">DRAG · DROP · RUN</div><div class="h2">拖进来，<span class="grad">点一下就能打开</span></div></div>
+    <div class="a" id="win">
+      <div class="tl" style="left:22px;background:#ff5f57"></div><div class="tl" style="left:46px;background:#febc2e"></div><div class="tl" style="left:70px;background:#28c840"></div>
+      <div id="side"><div>设备</div><div class="on">应用</div><div class="sec">准备</div><div>组件</div><div>活动</div></div>
+      <div id="wtitle">应用</div><div id="wsub">导入的应用会出现在这里。点开即在合适的设备上运行。</div>
+      <div id="drop">松开以导入</div>
+      <div id="toast"><span style="width:12px;height:12px;border-radius:50%;background:var(--green)"></span><span>TouchProbe.apk · 正在 Android 设备上安装并启动…</span><div class="bar" id="tbar"></div></div>
+    </div>
+    <div id="tiles"></div>
+    <div id="chips"></div>
+    <svg class="a" id="cursor" viewBox="0 0 24 24"><path d="M4 2 L4 19 L8.5 15 L11.5 22 L14.5 20.7 L11.6 14 L18 14 Z" fill="#111" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>
+    <div class="ripple" id="s3rip"></div>
+    <div class="a center" id="s3cap">APK · Simulator .app · IPA · .exe / .msi，统一进入应用库</div>
+  </section>
+
+  <!-- 4 · Live screen -->
+  <section class="scene" id="s4">
+    <div class="a center header" id="s4h"><div class="kicker">LIVE · INTERACTIVE</div><div class="h2">实时画面，<span class="grad">直接上手操作</span></div></div>
+    <div class="a devwin" id="aw" style="left:580px;top:250px;width:370px">
+      <img class="frame" src="assets/04-android-window.png" alt="">
+      <div class="ovl" id="aovl" style="left:15.9px;top:33.9px;width:338px;height:597px">
+        <img id="apost" src="assets/05-android-after-taps.png" style="position:absolute;inset:0;width:100%;height:100%;opacity:0" alt="">
+        <div class="dot" id="ad0"></div><div class="dot" id="ad1"></div>
+        <div class="ripple" id="ar0"></div><div class="ripple" id="ar1"></div><div class="ripple" id="ar2"></div>
+      </div>
+    </div>
+    <div class="a devwin" id="iw" style="left:980px;top:250px;width:370px">
+      <img class="frame" src="assets/07-ios-window.png" alt="">
+      <div class="ripple" id="ir0" style="border-color:rgba(10,132,255,.9)"></div>
+    </div>
+    <div class="a pill" id="p0" style="left:120px;top:380px"><em style="background:rgba(92,207,136,.18);color:#8ff0b6">▶</em><div>H.264 实时画面<small>设备视图 60 fps</small></div></div>
+    <div class="a pill" id="p1" style="left:120px;top:560px"><em style="background:rgba(79,159,255,.18);color:#9cc8ff">⚡</em><div>硬件解码<small>VideoToolbox · 低占用</small></div></div>
+    <div class="a pill" id="p2" style="left:1420px;top:380px"><em style="background:rgba(167,139,250,.2);color:#d6c8ff">☝</em><div>点按 · 滑动 · 输入<small>每次点按约 40 ms</small></div></div>
+    <div class="a pill" id="p3" style="left:1420px;top:560px"><em style="background:rgba(244,114,182,.18);color:#f9a8d4">▢</em><div>独立应用窗口<small>每个应用一个窗口</small></div></div>
+  </section>
+
+  <!-- 5 · Research tools -->
+  <section class="scene" id="s5">
+    <div class="a center header" id="s5h"><div class="kicker">BUILT FOR RESEARCH</div><div class="h2">调试与研究，<span class="grad">工具一应俱全</span></div></div>
+    <div class="a" id="term">
+      <div class="bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span class="mono">twinsim — zsh</span></div>
+      <div id="tbody" class="mono"></div>
+    </div>
+    <div class="a feat" id="f0" style="top:260px"><em style="background:linear-gradient(135deg,#7ff0b0,#3fbf78)">#</em><div><b>客体 root shell</b><small>adb root · 系统分区可写 · Magisk</small></div></div>
+    <div class="a feat" id="f1" style="top:434px"><em style="background:linear-gradient(135deg,#a9d0ff,#4f9fff)">≡</em><div><b>实时日志</b><small>logcat · Simulator 日志 · 按关键字过滤</small></div></div>
+    <div class="a feat" id="f2" style="top:608px"><em style="background:linear-gradient(135deg,#ffe29a,#f5b83d)">⇄</em><div><b>端口转发 · Frida</b><small>文件推送 / 拉取 · 端口映射</small></div></div>
+    <div class="a feat" id="f3" style="top:782px"><em style="background:linear-gradient(135deg,#d6c8ff,#9b7bf5)">◷</em><div><b>快照恢复</b><small>一键回到干净状态</small></div></div>
+  </section>
+
+  <!-- 6 · Components -->
+  <section class="scene" id="s6">
+    <div class="a center header" id="s6h"><div class="kicker">ON-DEMAND COMPONENTS</div><div class="h2">组件按需准备，<span class="grad">数据随你放</span></div></div>
+    <div class="a" id="shot"><img id="shotimg" src="assets/01-components.png" alt=""></div>
+    <div class="a call" id="k0" style="top:250px;--c:var(--green)"><b>来源、版本、体积透明</b><small>首次用到时才下载，无需 Android Studio</small></div>
+    <div class="a call" id="k1" style="top:400px;--c:var(--blue)"><b>许可原文 + SHA-256 指纹</b><small>需要授权的组件先确认再安装</small></div>
+    <div class="a call" id="k2" style="top:550px;--c:#f5b83d"><b>断点续传，校验后启用</b><small>进度实时显示，可随时取消</small></div>
+    <div class="a call" id="k3" style="top:700px;--c:var(--violet)"><b>支持外置硬盘</b><small>设备、运行环境和应用数据都可外放</small></div>
+  </section>
+
+  <!-- 7 · AI -->
+  <section class="scene" id="s7">
+    <div class="a center header" id="s7h"><div class="kicker">AI-READY · 36 TOOLS</div><div class="h2">交给 AI，<span class="grad">它也能替你操作</span></div></div>
+    <div class="a" id="chat">
+      <div class="ubub" id="u0">打开 TouchProbe.apk，点三下屏幕，再截张图给我</div>
+      <div class="tool" id="t0" style="top:180px"><span class="nm mono">open_app</span><span class="args mono">{ "app": "TouchProbe.apk" }</span><span class="st" id="t0s"></span></div>
+      <div class="tool" id="t1" style="top:284px"><span class="nm mono">tap</span><span class="args mono">× 3 · (101,720) (253,450) (430,270)</span><span class="st" id="t1s"></span></div>
+      <div class="tool" id="t2" style="top:388px"><span class="nm mono">screenshot</span><span class="args mono">{ "device": "Pixel" }</span><span class="st" id="t2s"></span></div>
+      <div class="abub" id="a0" style="top:500px">完成：已点按 3 次，屏幕显示 <b>taps: 3</b>。截图已附上。</div>
+    </div>
+    <div class="a" id="phone">
+      <div id="pscreen">
+        <img id="ppre" src="assets/04-android-window.png" style="position:absolute;width:371.9px;left:-15.9px;top:-34.1px" alt="">
+        <img id="ppost" src="assets/05-android-after-taps.png" style="position:absolute;inset:0;width:100%;height:100%;opacity:0" alt="">
+        <div id="pboot" style="position:absolute;inset:0;background:#05070d;display:flex;align-items:center;justify-content:center"><div class="spin" style="width:44px;height:44px;border-width:4px"></div></div>
+        <div class="ripple" id="pr0"></div><div class="ripple" id="pr1"></div><div class="ripple" id="pr2"></div>
+        <div id="flash"></div>
+      </div>
+    </div>
+    <div class="a center" id="aichips" style="top:944px;display:flex;justify-content:center;gap:16px">
+      <div class="aichip" style="color:#8ff0b6">MCP 服务器</div>
+      <div class="aichip" style="color:#9cc8ff">twinsim 命令行</div>
+      <div class="aichip" style="color:#c9b6ff">函数调用定义</div>
+      <div class="aichip">Claude Code · Cursor · Codex · Gemini CLI · VS Code</div>
+    </div>
+  </section>
+
+  <!-- 8 · Outro -->
+  <section class="scene" id="s8">
+    <div class="a" id="s8glow"></div>
+    <img class="a" id="s8icon" src="assets/icon.png" alt="">
+    <div class="a center" id="s8title">TwinSim</div>
+    <div class="a center" id="s8tag">Android · iOS · Windows，<span class="grad">一台 Mac 全搞定</span></div>
+    <div class="a center" id="s8url"><div class="mono">github.com/Dora-z/TwinSim</div></div>
+    <div class="a center" id="s8meta">GPL-3.0 开源 · Apple Silicon · macOS 15+</div>
+  </section>
+
+  <div id="fade"></div>
+</div>
+
+<script>
+const DURATION = 54;
+const SCENES = [[0,5],[5,11.5],[11.5,19],[19,26.5],[26.5,34],[34,40],[40,48.5],[48.5,54]];
+const $ = id => document.getElementById(id);
+const clamp = (x,a=0,b=1) => Math.min(b,Math.max(a,x));
+const prog = (t,a,b) => clamp((t-a)/(b-a));
+const eo = x => 1-Math.pow(1-x,3);
+const eio = x => x<.5 ? 4*x*x*x : 1-Math.pow(-2*x+2,3)/2;
+const back = x => { const c1=1.70158,c3=c1+1; return 1+c3*Math.pow(x-1,3)+c1*Math.pow(x-1,2); };
+function st(el, {o, x=0, y=0, s=1, r=0, blur}) {
+  if (typeof el === 'string') el = $(el);
+  if (o !== undefined) el.style.opacity = o;
+  el.style.transform = `translate(${x}px,${y}px) scale(${s}) rotate(${r}deg)`;
+  if (blur !== undefined) el.style.filter = blur > 0.05 ? `blur(${blur}px)` : 'none';
+}
+// fade + rise entrance
+function rise(el, t, a, d=.6, dist=40) { const p = eo(prog(t,a,a+d)); st(el,{o:p, y:(1-p)*dist}); return p; }
+function ripple(el, t, at, x, y, size=110) {
+  const p = prog(t, at, at+.55);
+  el.style.left = x+'px'; el.style.top = y+'px';
+  el.style.opacity = (p>0 && p<1) ? (1-p) : 0;
+  el.style.transform = `scale(${1 + eo(p)*size/20})`;
+  el.style.borderWidth = (4/(1+eo(p)*size/20)*2.2)+'px';
+}
+
+/* ---------- build dynamic DOM ---------- */
+'TwinSim'.split('').forEach(ch => { const s=document.createElement('span'); s.textContent=ch; $('s1title').appendChild(s); });
+const FILES = [
+  {n:'TouchProbe.apk', k:'APK', c:'linear-gradient(135deg,#6fe3a5,#2fae67)', sz:'Android · 1.2 MB'},
+  {n:'TouchProbe.app', k:'APP', c:'linear-gradient(135deg,#8cc2ff,#3b82f6)', sz:'iOS Simulator · 0.4 MB'},
+  {n:'Sample.ipa',     k:'IPA', c:'linear-gradient(135deg,#93a4ff,#5b5bd6)', sz:'iOS 研究引擎 · 3.1 MB'},
+  {n:'Minesweeper.exe',k:'EXE', c:'linear-gradient(135deg,#c9b6ff,#8b5cf6)', sz:'Windows · 0.2 MB'},
+  {n:'Tools.msi',      k:'MSI', c:'linear-gradient(135deg,#f9a8d4,#db2777)', sz:'Windows 安装包 · 5.6 MB'},
+];
+const tileXY = i => ({ x: 1050 + (i%4)*184, y: 400 + Math.floor(i/4)*204 });
+const chipXY = i => ({ x: 130, y: 300 + i*110 });
+FILES.forEach((f,i) => {
+  const t=document.createElement('div'); t.className='a tile'; t.id='tile'+i;
+  const p=tileXY(i); t.style.left=p.x+'px'; t.style.top=p.y+'px';
+  t.innerHTML=`<div class="ficon" style="background:${f.c}">${f.k}</div><span>${f.n}</span>`; $('tiles').appendChild(t);
+  const c=document.createElement('div'); c.className='a chip'; c.id='chip'+i;
+  const q=chipXY(i); c.style.left=q.x+'px'; c.style.top=q.y+'px';
+  c.innerHTML=`<div class="ficon" style="background:${f.c}">${f.k}</div><div><b>${f.n}</b><small>${f.sz}</small></div>`; $('chips').appendChild(c);
+});
+
+const TERM = [
+  {cmd:'twinsim verify_root --device Pixel', out:[['ok','✓ root: uid=0 · SELinux enforcing']]},
+  {cmd:'twinsim shell --device Pixel --command "id"', out:[['o','uid=0(root) gid=0(root) context=u:r:su:s0']]},
+  {cmd:'twinsim logs --device Pixel --lines 3 --filter TouchProbe', out:[['o','I TouchProbe: onCreate'],['o','I TouchProbe: tap x=101 y=720  taps=1'],['o','I TouchProbe: tap x=253 y=450  taps=2']]},
+  {cmd:'twinsim port_forward --device Pixel --guestPort 27042', out:[['ok','✓ localhost:27042 → guest:27042'],['k','$ frida -H 127.0.0.1:27042 -n TouchProbe']]},
+];
+(function schedule(){ let T=.9; for (const e of TERM){ e.t0=T; e.dur=e.cmd.length/58; e.tout=T+e.dur+.25; T=e.tout+.4+e.out.length*.1; } })();
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+
+/* ---------- render ---------- */
+function sceneVis(t,[a,b],i){
+  const fin = i===0 ? 1 : eo(prog(t,a,a+.55));
+  const fout = i===SCENES.length-1 ? 1 : 1-eio(prog(t,b-.45,b));
+  return Math.min(fin,fout) * (t>=a-0.001 && t<=b ? 1 : 0);
+}
+
+function render(t){
+  // background drift
+  st('b1',{x:-200+180*Math.sin(t*.13), y:-300+120*Math.cos(t*.11)});
+  st('b2',{x:1250+150*Math.cos(t*.12), y:500+140*Math.sin(t*.09)});
+  st('b3',{x:700+220*Math.sin(t*.08+1), y:650+100*Math.cos(t*.14)});
+  st('grid',{x:(t*12)%80, y:(t*8)%80});
+  $('wm').style.opacity = 0.75*Math.min(prog(t,5.2,5.9), 1-prog(t,48,48.6));
+
+  SCENES.forEach((rng,i)=>{
+    const el=$('s'+(i+1)); const v=sceneVis(t,rng,i);
+    el.style.opacity=v; el.style.display = v>0.001 ? 'block':'none';
+    const leaving = t > rng[1]-.45;
+    el.style.transform = leaving ? `scale(${1+.04*(1-v)})` : `scale(${1+.02*(1-v)})`;
+    if (v>0.001) RENDER[i](t-rng[0]);
+  });
+  $('fade').style.opacity = prog(t, DURATION-0.8, DURATION) + (1-prog(t,0,0.6));
+}
+
+const RENDER = [
+// 1 intro
+lt => {
+  const p=prog(lt,.2,1.1);
+  st('s1icon',{o:eo(p), s:.55+.45*back(p), y:6*Math.sin(lt*1.6)});
+  st('s1glow',{o:eo(prog(lt,.1,1.4))*(.85+.15*Math.sin(lt*2)), s:.8+.2*eo(prog(lt,.1,1.6))});
+  [...$('s1title').children].forEach((s,i)=>{ const q=eo(prog(lt,1.0+i*.06,1.55+i*.06)); st(s,{o:q, y:(1-q)*60, blur:(1-q)*8}); });
+  st('s1title',{});
+  rise('s1sub',lt,1.9,.7,30);
+  [...$('s1tags').children].forEach((c,i)=> rise(c,lt,2.5+i*.15,.5,24));
+},
+// 2 platforms
+lt => {
+  rise('s2h',lt,.15,.7,30);
+  for (let i=0;i<3;i++){
+    const p=eo(prog(lt,.55+i*.18,1.35+i*.18));
+    const glow = Math.max(0, Math.sin(Math.PI*prog(lt,3.0+i*.7,3.9+i*.7)));
+    const card=$('c'+i);
+    st(card,{o:p, y:(1-p)*90 - glow*14});
+    card.style.borderColor = `rgba(255,255,255,${.12+glow*.45})`;
+    [...card.querySelectorAll('li')].forEach((li,j)=> rise(li,lt,1.3+i*.18+j*.13,.5,16));
+  }
+},
+// 3 import
+lt => {
+  rise('s3h',lt,.1,.6,30);
+  const wp=eo(prog(lt,.3,1.0)); st('win',{o:wp, x:(1-wp)*120});
+  const dz = Math.min(prog(lt,1.3,1.6), 1-prog(lt,4.2,4.5)); $('drop').style.opacity = dz*(.75+.25*Math.sin(lt*6));
+  FILES.forEach((f,i)=>{
+    const a=chipXY(i), b=tileXY(i);
+    const appear=eo(prog(lt,.35+i*.1,.85+i*.1));
+    const f0=1.6+i*.45, p=eio(prog(lt,f0,f0+.8));
+    const sx=a.x+180, sy=a.y+42, ex=b.x+80, ey=b.y+90;
+    const cx=sx+(ex-sx)*p, cy=sy+(ey-sy)*p - 150*Math.sin(Math.PI*p);
+    const op = appear * (1-prog(lt,f0+.62,f0+.8));
+    st('chip'+i,{o:op, x:(cx-sx) - (1-appear)*80, y:cy-sy, s:1-.45*p, r:-6*Math.sin(Math.PI*p)});
+    const tp=prog(lt,f0+.7,f0+1.1);
+    st('tile'+i,{o:Math.min(1,tp*2), s: tp>0 ? (.5+.5*back(tp)) * (i===0 ? 1-.06*Math.sin(Math.PI*prog(lt,5.15,5.45)) : 1) : .5});
+  });
+  // cursor → click tile 0
+  const c=eio(prog(lt,4.4,5.1)); const t0=tileXY(0);
+  const cx=1560+(t0.x+96-1560)*c, cy=980+(t0.y+110-980)*c;
+  $('cursor').style.left=cx+'px'; $('cursor').style.top=cy+'px';
+  $('cursor').style.opacity=Math.min(prog(lt,4.3,4.6),1-prog(lt,6.9,7.2));
+  ripple($('s3rip'),lt,5.2,t0.x+80,t0.y+90,140);
+  $('s3rip').style.borderColor='rgba(79,159,255,.9)';
+  const tst=eo(prog(lt,5.4,5.8)); st('toast',{o:tst, y:(1-tst)*30});
+  $('tbar').style.width = (eio(prog(lt,5.5,7.2))*100)+'%';
+  rise('s3cap',lt,1.0,.6,20);
+},
+// 4 live screen
+lt => {
+  rise('s4h',lt,.1,.6,30);
+  const pa=eo(prog(lt,.3,1.1)), pi=eo(prog(lt,.5,1.3));
+  st('aw',{o:pa, y:(1-pa)*120, r:(1-pa)*-4}); st('iw',{o:pi, y:(1-pi)*120, r:(1-pi)*4});
+  [0,1].forEach(i=>{ const p=eo(prog(lt,1.1+i*.25,1.7+i*.25)); st('p'+i,{o:p,x:-(1-p)*60}); });
+  [2,3].forEach(i=>{ const p=eo(prog(lt,1.2+(i-2)*.25,1.8+(i-2)*.25)); st('p'+i,{o:p,x:(1-p)*60}); });
+  const W=338,H=597, pts=[[.2,.8],[.5,.5],[.85,.3]], tt=[2.2,2.9,3.6];
+  pts.forEach((pt,i)=> ripple($('ar'+i),lt,tt[i],pt[0]*W,pt[1]*H,90));
+  [0,1].forEach(i=>{ const d=$('ad'+i); d.style.left=pts[i][0]*W+'px'; d.style.top=pts[i][1]*H+'px';
+    d.style.opacity = lt>tt[i] && lt<tt[2]+.2 ? 1 : 0;
+    d.style.background = (i===1 || lt<tt[1]) ? '#ffcc00' : '#5ac8fa'; });
+  $('apost').style.opacity = prog(lt,tt[2],tt[2]+.15);
+  ripple($('ir0'),lt,4.4,370*.5,370*1544/840*.569,90);
+},
+// 5 terminal
+lt => {
+  rise('s5h',lt,.1,.6,30);
+  const tp=eo(prog(lt,.25,.9)); st('term',{o:tp,y:(1-tp)*50});
+  for(let i=0;i<4;i++){ const p=eo(prog(lt,.7+i*.22,1.3+i*.22)); st('f'+i,{o:p,x:(1-p)*70}); }
+  let html='', caretPlaced=false;
+  for (const e of TERM){
+    if (lt < e.t0) break;
+    const n=Math.floor(clamp((lt-e.t0)/e.dur)*e.cmd.length);
+    html += `<span class="p">➜ </span><span class="c">${esc(e.cmd.slice(0,n))}</span>`;
+    if (lt < e.tout){ html += `<span class="caret"></span>\n`; caretPlaced=true; break; }
+    html += '\n';
+    e.out.forEach(([c,s],j)=>{ if (lt >= e.tout + j*.1) html += `<span class="${c}">${esc(s)}</span>\n`; });
+  }
+  if (!caretPlaced) html += `<span class="p">➜ </span>` + (Math.floor(lt*2.2)%2===0 ? '<span class="caret"></span>' : '');
+  $('tbody').innerHTML = html;
+},
+// 6 components
+lt => {
+  rise('s6h',lt,.1,.6,30);
+  const p=eo(prog(lt,.2,1.0)); st('shot',{o:p, y:(1-p)*60});
+  $('shotimg').style.transform=`scale(${1+.05*eio(prog(lt,.8,5.8))})`;
+  for(let i=0;i<4;i++){ const q=eo(prog(lt,.8+i*.35,1.4+i*.35)); st('k'+i,{o:q,x:(1-q)*70}); }
+},
+// 7 AI
+lt => {
+  rise('s7h',lt,.1,.6,30);
+  const cp=eo(prog(lt,.2,.9)); st('chat',{o:cp,y:(1-cp)*50});
+  const pp=eo(prog(lt,.4,1.1)); st('phone',{o:pp,y:(1-pp)*80});
+  const ub=prog(lt,.7,1.1); st('u0',{o:ub, s:.9+.1*back(ub), y:(1-ub)*16});
+  const steps=[[1.3,2.4],[2.7,4.0],[4.3,4.9]];
+  steps.forEach(([a,b],i)=>{
+    const q=eo(prog(lt,a,a+.4)); st('t'+i,{o:q, x:(1-q)*-40});
+    const s=$('t'+i+'s');
+    const html = lt<b ? `<div class="spin" style="transform:rotate(${lt*400}deg)"></div><span style="color:#93a4cc">运行中</span>`
+                      : `<div class="chk">✓</div><span style="color:#8ff0b6">完成</span>`;
+    if (s.innerHTML!==html) s.innerHTML=html;
+  });
+  $('pboot').style.opacity = 1-prog(lt,2.2,2.5);
+  const W=340,H=604, pts=[[.2,.8],[.5,.5],[.85,.3]], tt=[3.0,3.4,3.8];
+  pts.forEach((pt,i)=> ripple($('pr'+i),lt,tt[i],pt[0]*W,pt[1]*H,90));
+  $('ppost').style.opacity = prog(lt,3.0,3.95);
+  $('flash').style.opacity = .85*(1-prog(lt,4.6,5.0))*(lt>=4.6?1:0);
+  const ab=prog(lt,5.1,5.5); st('a0',{o:ab, s:.92+.08*back(ab), y:(1-ab)*16});
+  [...$('aichips').children].forEach((c,i)=> rise(c,lt,5.6+i*.15,.5,20));
+},
+// 8 outro
+lt => {
+  const p=prog(lt,.15,1.0);
+  st('s8icon',{o:eo(p), s:.6+.4*back(p), y:5*Math.sin(lt*1.6)});
+  st('s8glow',{o:eo(prog(lt,0,1.2))*(.85+.15*Math.sin(lt*2))});
+  rise('s8title',lt,.6,.7,40);
+  rise('s8tag',lt,1.1,.7,30);
+  rise('s8url',lt,1.6,.6,24);
+  rise('s8meta',lt,2.0,.6,20);
+},
+];
+
+window.render = render; window.DURATION = DURATION;
+// Live preview when opened directly in a browser (no ?capture)
+if (!location.search.includes('capture')) {
+  const t0 = performance.now();
+  (function loop(){ render(((performance.now()-t0)/1000) % DURATION); requestAnimationFrame(loop); })();
+} else { render(0); }
+</script>
+</body>
+</html>

@@ -84,6 +84,19 @@ final class AppStore {
     /// Android apps open in their own native-style window (virtual display) unless turned off in Settings.
     static let androidAppWindowsKey = "androidAppWindows"
     var androidAppWindows: Bool { UserDefaults.standard.object(forKey: Self.androidAppWindowsKey) as? Bool ?? true }
+
+    /// Apps that must run on the phone's main display (e.g. banking apps whose anti-screen-sharing
+    /// check refuses virtual displays). Remembered per package.
+    static let deviceViewPackagesKey = "deviceViewPackages"
+    private(set) var deviceViewPackages: Set<String> =
+        Set(UserDefaults.standard.stringArray(forKey: AppStore.deviceViewPackagesKey) ?? [])
+
+    func prefersDeviceView(_ artifact: Artifact) -> Bool { deviceViewPackages.contains(artifact.bundleId) }
+
+    func setPrefersDeviceView(_ artifact: Artifact, _ value: Bool) {
+        if value { deviceViewPackages.insert(artifact.bundleId) } else { deviceViewPackages.remove(artifact.bundleId) }
+        UserDefaults.standard.set(Array(deviceViewPackages).sorted(), forKey: Self.deviceViewPackagesKey)
+    }
     var helperPID: Int32? { process?.isRunning == true ? process?.pid : nil }
 
     func instance(_ id: UUID) -> Instance? { instances.first { $0.id == id } }
@@ -650,7 +663,7 @@ final class AppStore {
         launching.insert(artifact.id)
         defer { launching.remove(artifact.id) }
         do {
-            let appWindow = artifact.kind == "apk" && androidAppWindows && !forceDeviceView
+            let appWindow = artifact.kind == "apk" && androidAppWindows && !forceDeviceView && !prefersDeviceView(artifact)
             let accepted = try await submit { client, key in
                 try await client.launch(artifact.id, instanceId: instanceId, profileId: profileId,
                                         launch: appWindow ? false : nil, key: key)

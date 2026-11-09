@@ -149,6 +149,9 @@ struct ArtifactCard: View {
                     if artifact.kind == "apk" {
                         Divider()
                         Button("在完整设备视图中打开") { Task { await store.open(artifact, forceDeviceView: true) } }
+                        Toggle("总是在设备视图中打开", isOn: Binding(
+                            get: { store.prefersDeviceView(artifact) },
+                            set: { store.setPrefersDeviceView(artifact, $0) }))
                         Divider()
                         ForEach(["android-aosp", "android-research", "android-magisk", "android-google-apis"], id: \.self) { profile in
                             Button("用 \(Labels.profile(profile)) 工作区打开") {
